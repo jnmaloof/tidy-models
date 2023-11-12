@@ -1,0 +1,211 @@
+---
+title: "Chapter1-2-3"
+author: "Julin Maloof"
+date: "2023-11-12"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(tidymodels)
+```
+
+# Chapter 1
+
+## 1.1 Software for modeling
+
+Pit of success- software should be cause customers to fall into winning practices 
+
+Should promote good scientific methodology; prevent users from making mistakes.  Make it easy to do the right thing.
+
+## 1.2 Type of models
+
+### Descriptive models
+
+Describe, illustrate, or visually emphasize some trend or artifact in the data.
+
+### Inferential models
+
+produce a decision for a research question, test a hypothesis.
+
+### Predictive models
+
+make a prediction for new data
+
+estimation instead of inference
+
+mechanistic models: derivewd using first principles about what factors affect the outcome
+
+emprically driven models: just get the result, e.g. k nearest neighbors.  machine learning.
+
+## 1.4 Some terminology
+
+* unsupervised: clustering, etc, without an outcome variable
+* supervised: outcome variable.  regression, neural networks, etc
+  * Regression: predict an outcome
+  * Classification: predic an outcome that is an ordered or unordered set of qualitative values
+  
+outcome variables
+  
+predictor variables
+
+quantitative and qualitative
+
+## 1.5 Data analysis process
+
+* Clean
+* EDA
+* Feature engineering (PCA, ratios, transformations)
+* Model tuning and selection
+* Model evaluation
+
+# 2 A tidyverse primer
+
+## 2.1 Tidyverse principles
+
+* Design for humans
+* Reuse existing data structures
+* Design for the pipe and functional programming
+
+```{r}
+library(lubridate)
+
+url <- "https://data.cityofchicago.org/api/views/5neh-572f/rows.csv?accessType=DOWNLOAD&bom=true&format=true"
+
+all_stations <- 
+  # Step 1: Read in the data.
+  read_csv(url) %>% 
+  # Step 2: filter columns and rename stationname
+  dplyr::select(station = stationname, date, rides) %>% 
+  # Step 3: Convert the character date field to a date encoding.
+  # Also, put the data in units of 1K rides
+  mutate(date = mdy(date), rides = rides / 1000) %>% 
+  # Step 4: Summarize the multiple records using the maximum.
+  group_by(date, station) %>% 
+  summarize(rides = max(rides), .groups = "drop")
+```
+
+# 3 R Modeling Fundamentals
+
+## 3.1 Example
+
+```{r}
+
+data(crickets, package = "modeldata")
+names(crickets)
+
+# Plot the temperature on the x-axis, the chirp rate on the y-axis. The plot
+# elements will be colored differently for each species:
+ggplot(crickets, 
+       aes(x = temp, y = rate, color = species, pch = species, lty = species)) + 
+  # Plot points for each data point and color by species
+  geom_point(size = 2) + 
+  # Show a simple linear model fit created separately for each species:
+  geom_smooth(method = lm, se = FALSE, alpha = 0.5) + 
+  scale_color_brewer(palette = "Paired") +
+  labs(x = "Temperature (C)", y = "Chirp Rate (per minute)")
+```
+
+Fit it
+
+```{r}
+interaction_fit <-  lm(rate ~ (temp + species)^2, data = crickets) 
+
+# To print a short summary of the model:
+interaction_fit
+
+summary(interaction_fit)
+```
+
+```{r}
+# Place two plots next to one another:
+par(mfrow = c(1, 2))
+
+# Show residuals vs predicted values:
+plot(interaction_fit, which = 1)
+
+# A normal quantile plot on the residuals:
+plot(interaction_fit, which = 2)
+```
+
+Test the interaction term:
+
+```{r}
+# Fit a reduced model:
+main_effect_fit <-  lm(rate ~ temp + species, data = crickets) 
+
+# Compare the two:
+anova(main_effect_fit, interaction_fit)
+
+```
+```{r}
+summary(main_effect_fit)
+```
+
+predict
+
+```{r}
+new_values <- data.frame(species = "O. exclamationis", temp = 15:20)
+predict(main_effect_fit, new_values)
+
+```
+
+
+## 3.3
+
+```{r}
+corr_res <- map(mtcars %>% select(-mpg), cor.test, y = mtcars$mpg)
+
+# The first of ten results in the vector: 
+corr_res[[1]]
+```
+
+```{r}
+library(broom)
+
+tidy(corr_res[[1]])
+```
+
+```{r}
+corr_res %>% 
+  # Convert each to a tidy format; `map_dfr()` stacks the data frames 
+  map_dfr(tidy, .id = "predictor") %>% 
+  ggplot(aes(x = fct_reorder(predictor, estimate))) + 
+  geom_point(aes(y = estimate)) + 
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = .1) +
+  labs(x = NULL, y = "Correlation with mpg")
+```
+
+## 3.4 Combining base models and the tidyverse
+
+separate models for each species
+```{r}
+split_by_species <- 
+  crickets %>% 
+  group_nest(species) 
+split_by_species
+```
+
+```{r}
+model_by_species <- 
+  split_by_species %>% 
+  mutate(model = map(data, ~ lm(rate ~ temp, data = .x)))
+model_by_species
+
+```
+
+```{r}
+model_by_species %>% 
+  mutate(coef = map(model, tidy)) %>% 
+  select(species, coef) %>% 
+  unnest(cols = c(coef))
+```
+
+
+
+
+
