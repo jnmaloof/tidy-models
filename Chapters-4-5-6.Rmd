@@ -1,0 +1,203 @@
+---
+title: "Chapters-4-5-6"
+author: "Julin Maloof"
+date: "2023-11-19"
+output: 
+  html_document: 
+    keep_md: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidymodels)
+tidymodels_prefer()
+```
+
+
+# Chapter 4 Ames Housing Data
+
+```{r}
+data(ames)
+
+ames
+```
+
+```{r}
+ggplot(ames, aes(x = Sale_Price)) + 
+  geom_histogram(bins = 50, col= "white")
+```
+
+```{r}
+ggplot(ames, aes(x = Sale_Price)) + 
+  geom_histogram(bins = 50, col= "white") +
+  scale_x_log10()
+```
+
+```{r}
+ames <- ames %>% mutate(Sale_Price = log10(Sale_Price))
+```
+
+## trying to make the street maps view
+
+following [Josh McCrain's tutorial](https://joshuamccrain.com/tutorials/maps/streets_tutorial.html) and [ggplot tutor](https://ggplot2tutor.com/tutorials/streetmaps)
+
+```{r, eval=FALSE}
+remotes::install_github("ropensci/osmdata")
+```
+
+# Chapter 5 Spending our Data
+
+## 5.1 Common Methods for Splitting Data
+
+Training and test
+
+Can you `initial split` to accomplish this:
+
+```{r}
+# Save the split information for an 80/20 split of the data
+ames_split <- initial_split(ames, prop = 0.80)
+ames_split # this just has the indexes
+
+# once this is established, then use it:
+ames_train <- training(ames_split)
+ames_test  <-  testing(ames_split)
+
+dim(ames_train)
+
+```
+
+By default `initial_split` splits randomly, but sometimes you may want to do something different:
+
+* stratified sampling.  Can base either on categories of data, or bins of a variable.
+
+No real downside, maybe should just do this by default
+
+```{r}
+set.seed(502)
+ames_split <- initial_split(ames, prop = 0.80, strata = Sale_Price)
+ames_train <- training(ames_split)
+ames_test  <-  testing(ames_split)
+
+dim(ames_train)
+```
+
+## 5.2 What about a validation set?
+
+most commonly used in deep-learining models
+
+```{r, eval=FALSE}
+set.seed(52)
+# To put 60% into training, 20% in validation, and 20% in testing:
+ames_val_split <- initial_validation_split(ames, prop = c(0.6, 0.2))
+ames_val_split
+
+```
+
+## 5.3 Multi-level data
+
+Need to consider the experimental unit.
+
+Note: could nest and then use the functions from rsample
+
+# 6 Fitting Models with Parsnip
+
+workflow:
+
+1. Specify the type fo model based on its mathematical structure
+2. Specify the engine for fitting the model.
+3. When required, declare the mdoe of the model.  (e.g. regression vs classification)
+
+Can build these specidications without referencing the data:
+
+```{r}
+
+linear_reg() %>% set_engine("lm")
+
+
+linear_reg() %>% set_engine("glmnet") 
+
+
+linear_reg() %>% set_engine("stan")
+
+```
+
+can use `translate` to see what parsnip is doing
+
+example lm fit using formula and x_y interfaces
+```{r}
+lm_model <- 
+  linear_reg() %>% 
+  set_engine("lm")
+
+lm_form_fit <- 
+  lm_model %>% 
+  # Recall that Sale_Price has been pre-logged
+  fit(Sale_Price ~ Longitude + Latitude, data = ames_train)
+
+lm_xy_fit <- 
+  lm_model %>% 
+  fit_xy(
+    x = ames_train %>% select(Longitude, Latitude),
+    y = ames_train %>% pull(Sale_Price)
+  )
+
+lm_form_fit
+
+
+lm_xy_fit
+
+```
+
+## 6.2 Use the Model Results
+
+```{r}
+lm_form_fit %>% extract_fit_engine()
+
+```
+Normal methods can be applied:
+
+```{r}
+lm_form_fit %>% extract_fit_engine() %>% vcov()
+
+```
+built-in summary methods can be painful.  broom::tidy returns results in an easy to deal with, and consistently named data frame:
+
+```{r}
+tidy(lm_form_fit)
+
+```
+
+## 6.3 Make Predictions
+
+If we use Parsnip, the following rules will always apply:
+
+1. Results will be a tibble
+2. The column names are always predictable
+3. There are always as many rows in the tibble as there are in the input data set.
+
+```{r}
+ames_test_small <- ames_test %>% slice(1:5)
+predict(lm_form_fit, new_data = ames_test_small)
+```
+
+Easy to combine with true values:
+
+```{r}
+ames_test_small %>% 
+  select(Sale_Price) %>% 
+  bind_cols(predict(lm_form_fit, ames_test_small)) %>% 
+  # Add 95% prediction intervals to the results:
+  bind_cols(predict(lm_form_fit, ames_test_small, type = "pred_int")) 
+```
+
+Exercise ideas:
+
+1. map neighborhoods
+2. rsample a repeated-measures study
+3. fit an lm to the tomato dataset, but using parsnip tools
+
+
+
