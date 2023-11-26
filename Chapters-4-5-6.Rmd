@@ -196,8 +196,9 @@ ames_test_small %>%
 Exercise ideas:
 
 1. map neighborhoods
-2. rsample a repeated-measures study
-3. fit an lm to the tomato dataset, but using parsnip tools
-
+2. rsample a repeated-measures study (ChickWeight) to create training and test sets
+3. fit an lm to the ChickWeight (training) data set, modelling weight as a function of diet and time, but using parsnip tools.  If you know how, try making this a mixed-effects model.  
+4. predict weight in your test set chicks. (using parsnip tools)
+5. plot predicted vs observed in your test data set.
 
 

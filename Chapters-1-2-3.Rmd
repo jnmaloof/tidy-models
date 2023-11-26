@@ -208,6 +208,14 @@ model_by_species %>%
 ```
 
 
+```{r}
 
+get.r2 <- function(lmfit) {
+  summary(lmfit)$r.squared
+}
+
+model_by_species %>% 
+  mutate(r2 = map_dbl(model, get.r2)) 
+```
 
 
