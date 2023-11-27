@@ -1,0 +1,168 @@
+---
+title: "Nov 27 Exercises"
+author: "Julin Maloof"
+date: "2023-11-26"
+output: 
+  html_document: 
+    keep_md: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, eval=FALSE}
+install.packages("multilevelmod")
+```
+
+
+```{r}
+library(tidymodels)
+library(multilevelmod)
+library(broom.mixed)
+library(lmerTest)
+tidymodels_prefer()
+```
+
+## 1  Use rsample to create training and test sets from ChickWeight.  Think about how you want this to be split.   message me if you are stuck.
+
+```{r}
+data("ChickWeight")
+skimr::skim(ChickWeight)
+```
+
+plot it
+```{r}
+ChickWeight %>%
+  ggplot(aes(x=Time, y=weight)) +
+  geom_line(aes(group=Chick), alpha=.2) +
+  geom_smooth() +
+  facet_wrap(~Diet)
+  
+```
+
+
+Seems to me that our test set should consist of unobserved chickens, stratified across the diets.
+
+```{r}
+chickwt.gr <- ChickWeight %>% group_by(Chick, Diet) %>% nest()
+
+chick.split <- chickwt.gr %>%
+  rsample::initial_split(prop = .8, strata = Diet)
+
+chick.split
+```
+
+```{r}
+chick.train <- training(chick.split) %>% unnest(cols = data)
+chick.test <- testing(chick.split) %>% unnest(cols = data)
+chick.train
+chick.test
+```
+
+```{r}
+ChickWeight %>% group_by(Diet) %>% summarize(chicks = length(unique(Chick)))
+chick.train %>% group_by(Diet) %>% summarize(chicks = length(unique(Chick)))
+chick.test %>% group_by(Diet) %>% summarize(chicks = length(unique(Chick)))
+```
+
+## 2. Fit an lm to the ChickWeight (training) data set, modeling weight as a function of diet and time (and their interaction?),  using parsnip tools.  This really should be a mixed-effects model, so see if you can do that instead (e.g. with lme4 or stan as the engine).
+
+### lm
+
+Basic set-up
+```{r}
+lm_model <- linear_reg() %>%
+  set_engine("lm") # not necessary, this is the default
+```
+
+```{r}
+lm_fit_add <- lm_model %>%
+  fit(weight ~ Time + Diet, data=chick.train)
+
+lm_fit_add
+```
+
+Use mixed-effects
+
+```{r}
+lme_model <- linear_reg(engine = "lmer")
+
+lme_fit_add <- lme_model %>% fit(weight ~ Time + Diet + (1|Chick), data=chick.train)
+
+lme_fit_add
+
+glance(lme_fit_add)
+
+tidy(lme_fit_add)
+
+lme_fit_add %>% extract_fit_engine() %>% summary
+
+lme_fit_add %>% extract_fit_engine() %>% anova()
+```
+But...
+
+```{r}
+lmerTest::lmer(weight ~ Time + Diet + (1|Chick), data=chick.train) %>% summary()
+```
+
+```{r}
+lme_fit_int <- lme_model %>%
+  fit(weight ~ Time*Diet + (1|Chick), data=chick.train)
+
+bind_rows(glance(lme_fit_add), glance(lme_fit_int))
+```
+
+```{r}
+glmer_model <- linear_reg(engine = "stan_glmer")
+
+glmer_fit_int <- glmer_model %>% fit(weight ~ Time*Diet + (1|Chick), data=chick.train)
+
+glance(glmer_fit_int)
+
+glmer_fit_int %>% extract_fit_engine() %>% summary()
+
+```
+
+
+
+## 3. Use your model to predict weight in your test set chicks. (using parsnip tools)
+plot predicted vs observed in your test data set.
+
+```{r}
+fits <- tibble(name=ls(.GlobalEnv, pattern=".*_fit.*"),
+               fit = map(name, get))
+fits
+```
+
+Frustrations: inconsistency in conf.int predictions, and can't predice from lme_fit
+
+```{r}
+fits <- fits %>% mutate(pred=map(fit, predict, new_data=chick.test),
+                        pred=map(pred, bind_cols, chick.test)) # add observed
+
+```
+
+```{r}
+fits %>% select(-fit) %>% unnest(pred)
+```
+
+```{r}
+fits %>% select(-fit) %>% unnest(pred) %>%
+  ggplot(aes(x=weight, y=.pred, color=Diet)) +
+  scale_color_brewer(type = "qual", palette = "Set2") +
+  geom_point() +
+  facet_wrap(~name) +
+  coord_equal()
+```
+
+```{r}
+fits %>% select(-fit) %>% unnest(pred) %>% 
+  rename(obs = weight, model=name) %>%
+  pivot_longer(cols=c(obs, .pred)) %>%
+  ggplot(aes(x=Time, y=value, color=Diet, lty=name)) +
+  scale_color_brewer(type = "qual", palette = "Set1") +
+  geom_smooth(se = FALSE) +
+  facet_wrap(~model)
+```
+
