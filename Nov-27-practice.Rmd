@@ -45,6 +45,7 @@ ChickWeight %>%
 Seems to me that our test set should consist of unobserved chickens, stratified across the diets.
 
 ```{r}
+##Note this could be done more simply with group_initial_split()
 chickwt.gr <- ChickWeight %>% group_by(Chick, Diet) %>% nest()
 
 chick.split <- chickwt.gr %>%
@@ -81,6 +82,10 @@ lm_fit_add <- lm_model %>%
   fit(weight ~ Time + Diet, data=chick.train)
 
 lm_fit_add
+
+lm_fit_add %>% extract_fit_engine() %>% summary()
+
+lm_fit_add %>% glance()
 ```
 
 Use mixed-effects
@@ -111,6 +116,9 @@ lme_fit_int <- lme_model %>%
   fit(weight ~ Time*Diet + (1|Chick), data=chick.train)
 
 bind_rows(glance(lme_fit_add), glance(lme_fit_int))
+
+anova(extract_fit_engine(lme_fit_add), 
+      extract_fit_engine(lme_fit_int))
 ```
 
 ```{r}
@@ -135,12 +143,13 @@ fits <- tibble(name=ls(.GlobalEnv, pattern=".*_fit.*"),
 fits
 ```
 
-Frustrations: inconsistency in conf.int predictions, and can't predice from lme_fit
+Frustrations: inconsistency in conf.int predictions, and can't predict from lme_fit
 
 ```{r}
 fits <- fits %>% mutate(pred=map(fit, predict, new_data=chick.test),
                         pred=map(pred, bind_cols, chick.test)) # add observed
 
+fits$pred[[1]]
 ```
 
 ```{r}

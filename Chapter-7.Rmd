@@ -1,0 +1,188 @@
+---
+title: "Chapter 7"
+author: "Julin Maloof"
+date: "2023-12-08"
+output: 
+  html_document: 
+    keep_md: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidymodels)
+library(multilevelmod)
+library(workflowsets)
+tidymodels_prefer()
+load("ames_test_train.Rdata")
+```
+
+# Chapter 7: A Model Workflow
+
+include pre and post-processing steps in addition to the model fit in a workflow.
+
+## 7.2 Workflow Basics
+
+Create the model
+```{r}
+lm_model <- linear_reg() %>%
+  set_engine("lm")
+```
+
+Now create a workflow
+```{r}
+lm_wflow <- workflow() %>%
+  add_model(lm_model)
+
+lm_wflow
+```
+
+What about a pre-processor?
+
+If very simple, can just be a formula:
+
+```{r}
+lm_wflow <- 
+  lm_wflow %>% 
+  add_formula(Sale_Price ~ Longitude + Latitude)
+
+lm_wflow
+```
+
+Workslows have a fit method that can be used to create the model
+
+```{r}
+lm_fit <- fit(lm_wflow, ames_train)
+lm_fit
+```
+
+Can predict from this:
+```{r}
+predict(lm_fit, ames_test %>% slice(1:3))
+```
+
+can update model or pre-processor
+```{r}
+lm_fit %>% update_formula(Sale_Price ~ Longitude)
+```
+Would need to add data and refit
+
+## 7.3 Adding Raw Variables to the Workflow
+
+This is an alternative to using a formula
+
+```{r}
+lm_wflow <- lm_wflow %>%
+  remove_formula() %>%
+  add_variables(outcome = Sale_Price, predictors = c(Longitude, Latitude))
+lm_wflow
+```
+
+```{r}
+fit(lm_wflow, ames_train)
+```
+## 7.4 How does a `workflow()` use the formula?
+
+This is complicated because different packages do different transformations of the formula...
+
+workflow attempts to do whatever the underlying model would do.
+
+I am a little confused about whether or not workflow will create dummy variables for us when a package expects the user to do so (e.g. xgboost).  Maybe this will be come clear as we continue.
+
+### 7.4.1 Special formulas and inline functions
+
+Here we specify the formula when we specify the model...
+
+Seems a little strange to me that we need to add variables and also have a formula later.
+
+```{r}
+multilevel_spec <- linear_reg() %>% set_engine("lmer")
+
+multilevel_workflow <- 
+  workflow() %>% 
+  # Pass the data along as-is: 
+  add_variables(outcome = distance, predictors = c(Sex, age, Subject)) %>% 
+  add_model(multilevel_spec, 
+            # This formula is given to the model
+            formula = distance ~ Sex + (age | Subject))
+
+multilevel_fit <- fit(multilevel_workflow, data = nlme::Orthodont)
+multilevel_fit
+```
+
+Also works when you have functions in your formula:
+```{r}
+library(censored)
+
+parametric_spec <- survival_reg()
+
+parametric_workflow <- 
+  workflow() %>% 
+  add_variables(outcome = c(fustat, futime), predictors = c(age, rx)) %>% 
+  add_model(parametric_spec, 
+            formula = Surv(futime, fustat) ~ age + strata(rx))
+
+parametric_fit <- fit(parametric_workflow, data = ovarian)
+parametric_fit
+```
+
+## 7.5 Creating Multiple Workflows at once
+
+Use a workflow set if you want to try a bunch of different formulas, etc.
+
+Example: multiple formulas for Ames data set Sales as a function of location
+
+```{r}
+location <- list(
+  longitude = Sale_Price ~ Longitude,
+  latitude = Sale_Price ~ Latitude,
+  coords = Sale_Price ~ Longitude + Latitude,
+  neighborhood = Sale_Price ~ Neighborhood
+)
+```
+
+Now create the workflow set
+```{r}
+location_models <- workflow_set(preproc = location, models = list(lm = lm_model))
+location_models
+
+```
+
+
+```{r}
+location_models$info[[1]]
+
+```
+```{r}
+extract_workflow(location_models, id = "coords_lm")
+
+```
+fit each one.  A little ugly...(although apparently we will see something better in Chapter 11)
+```{r}
+location_models <-
+   location_models %>%
+   mutate(fit = map(info, ~ fit(.x$workflow[[1]], ames_train)))
+location_models
+```
+
+```{r}
+location_models$fit[[1]]
+
+```
+
+## 7.6 Evaluating the test set...
+
+```{r}
+final_lm_res <- last_fit(lm_wflow, ames_split)
+final_lm_res
+```
+
+```{r}
+fitted_lm_wflow <- extract_workflow(final_lm_res)
+
+collect_metrics(final_lm_res)
+collect_predictions(final_lm_res) %>% slice(1:5)
+```
+

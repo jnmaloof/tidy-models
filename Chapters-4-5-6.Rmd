@@ -67,6 +67,7 @@ ames_test  <-  testing(ames_split)
 
 dim(ames_train)
 
+save(ames_split, ames_train, ames_test, file = "ames_test_train.Rdata")
 ```
 
 By default `initial_split` splits randomly, but sometimes you may want to do something different:
