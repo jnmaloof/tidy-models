@@ -1,0 +1,140 @@
+---
+title: "Practice-chapter-7-8.Rmd"
+author: "Julin Maloof"
+date: "2023-12-16"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(tidymodels)
+tidymodels_prefer()
+library(workflowsets)
+```
+
+Things to practice:
+
+* create a workflow
+* use the workflow for different formulas (or models?)
+* recipes with data transformations 
+* recipes with PCA
+
+```{r}
+library(modeldata)
+data("Chicago")
+Chicago
+```
+
+```{r}
+Chicago <- Chicago %>%
+  mutate(weekend = timeDate::isBizday(timeDate::as.timeDate(date)))
+```
+
+```{r}
+Chicago %>% ggplot(aes(x=ridership)) + geom_histogram()
+```
+
+
+
+```{r}
+Chicago %>% ggplot(aes(y=ridership, x=temp_max, color=as.logical(weekend))) +
+ # geom_point() +
+    geom_smooth() + scale_x_log10()
+```
+
+```{r}
+lm(ridership ~ temp_max + weekend, data=Chicago) %>% summary
+```
+
+```{r}
+lm(ridership ~ sqrt(temp_max) + weekend, data=Chicago) %>% summary
+```
+
+```{r}
+set.seed(010324)
+Chicago_split <- initial_split(Chicago, prop = 0.8, strata = ridership)
+c_train <- training(Chicago_split)
+c_test <- testing(Chicago_split)
+```
+
+```{r}
+colnames(Chicago) %>% sort()
+```
+
+```{r}
+weather <- list(
+  temp_min = ridership ~ temp_min + weekend,
+  temp = ridership ~ temp + weekend,
+  temp_max = ridership ~ temp_max + weekend,
+  temp_change = ridership ~ temp_change + weekend,
+  percip = ridership ~ percip + weekend,
+  percip_max = ridership ~ percip_max + weekend
+)
+```
+
+
+```{r}
+weather_models <- workflow_set(preproc = weather,
+                               models = list(lm = linear_reg())
+)
+
+weather_models <- weather_models %>%
+  mutate(fit = map(info, ~ fit(.x$workflow[[1]], c_train)))
+```
+
+```{r}
+weather_models %>%
+  mutate(tidy=map(fit, tidy)) %>%
+  select(wflow_id, tidy) %>%
+  unnest(tidy) %>%
+  filter(str_detect(term, "temp|percip"))
+```
+```{r}
+weather_models %>%
+  mutate(glance=map(fit, glance)) %>%
+  select(wflow_id, glance) %>%
+  unnest(glance) %>% 
+  arrange(desc(logLik))
+```
+
+```{r}
+c_recipe <-  recipe(formula = ridership ~ . , data=c_train) %>%
+  update_role(date, new_role = "date") %>%
+  add_role(matches("Home|Away$"), new_role="sports") %>%
+  add_role(matches("^[A-Z]", ignore.case=FALSE), -has_role("sports"), new_role="station") %>%
+  add_role(matches("^[a-z]", ignore.case=FALSE), -date, -weekend, -ridership, new_role="weather") %>%
+  step_normalize(has_role("weather"), has_role("station")) %>%
+  step_pca(has_role("station"), threshold = 0.75, prefix = "S_PC", id="station_pca")  %>%
+  step_pca(has_role("weather"), threshold = 0.75, prefix = "W_PC", id = "weather_pca") 
+
+
+tidy(c_recipe)
+  
+c_recipe %>% prep()
+
+c_recipe %>% prep() %>% bake(c_train[1:10,])
+```
+
+```{r}
+lm_wflow <- workflow() %>%
+  add_model(linear_reg(engine = "lm")) %>%
+  add_recipe(c_recipe) 
+
+
+lm_fit <- fit(lm_wflow, c_train)
+
+tidy(lm_fit) %>% arrange(p.value)
+```
+
+```{r}
+predicted <- lm_fit %>% predict(c_test)
+
+plot(c_test$ridership, predicted$.pred)
+
+cor.test(c_test$ridership, predicted$.pred)
+```
+

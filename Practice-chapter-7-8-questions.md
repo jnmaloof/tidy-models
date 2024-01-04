@@ -1,0 +1,73 @@
+---
+title: "Practice-chapter-7-8.Rmd"
+author: "Julin Maloof"
+date: "2024-01-03"
+output: 
+  html_document: 
+    keep_md: yes
+---
+
+We will practice using the Chicago data set on public transit ridership.  You can access it with:
+
+
+```r
+library(modeldata)
+data("Chicago")
+Chicago
+```
+
+Read about it with `?Chicago`; read more about it in [Kuhn and Johnson](https://bookdown.org/max/FES/chicago-intro.html)
+
+## 1.  Explore the data
+
+Make a histogram of ridership.  What might be causing the two peaks.  Is there a predictor variable that can account for this (or that can be used to make a new variable to account for it)?
+
+I am not suggesting that you do regressions or plots on all variables at this time, rather that you think about what might have this kind of impact.
+
+If you need to make a new predictor variable, go ahead.
+
+
+## 2. Training and Test
+
+Make an 80/20 train/test split.  Do you need to stratify over anything?  
+
+So that we are working on the same split, use `set.seed(010324)` in you code chunk
+
+## 3. Workflow set
+
+Let's compare the effectiveness  of the temp and percip [sic] predictors.  
+
+### 3A 
+
+Use a workflow set (see chapter 7) to fit six models, each of which has your predictor from Q1 along with one of the following variables:
+
+`temp_min`, `temp`, `temp_max`, `temp_change`, `percip`, `percip_max`
+
+The formula for one of these would be something like `ridership ~ temp_min + Q1_predictor`.
+
+### 3B 
+
+Compare the model fits / predictors (this can be using any of the p-value of the predictor, R2, AIC, log-lik).  Don't worry about the test set, just compare goodness of fit when fit with the training set.
+
+## 4 Recipes
+
+### 4A
+
+Create a workflow recipe does the following:
+
+* normalizes all weather and station predictors
+* creates a set of PCs for the weather-related predictors, keeping enough PCs to explain 75% of the variance in the weather variables
+* creates a second set of PCs for the station-related predictors, keeping enough PCs to explaining 75% of the variance in these variables
+
+Hint: `tidy()`, `prep()`, and `bake()` methods for recipes may be helpful in examining what you have done.  The help file on `recipe` is good to0.
+
+Hint2: You can use various dplyr::select functions and regular expressions to avoid having to type out the variable names.  But as a fair-warning, it took me a lot longer to figure that out than it would have to just type then out.  (But next time it might be faster).  I can demo.
+
+### 4B
+
+Use the recipe from 4A to fit a linear regression of ridership on the new PCs and all remaining predictors (i.e. those not used in making the PCs).  Use the training data.
+
+### 4C
+
+Use the fit from 4B to predict ridership in the test data.  Evaluate the predictions.
+
