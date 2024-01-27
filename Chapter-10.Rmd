@@ -1,0 +1,228 @@
+---
+title: "Chapter 10"
+author: "Julin Maloof"
+date: "2024-01-26"
+output: 
+  html_document: 
+    keep_md: true
+---
+
+```{r, warning=FALSE, message=FALSE}
+library(tidymodels)
+```
+
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+# rerun prior code
+data(ames)
+ames <- mutate(ames, Sale_Price = log10(Sale_Price))
+
+set.seed(502)
+ames_split <- initial_split(ames, prop = 0.80, strata = Sale_Price)
+ames_train <- training(ames_split)
+ames_test  <-  testing(ames_split)
+
+ames_rec <- 
+  recipe(Sale_Price ~ Neighborhood + Gr_Liv_Area + Year_Built + Bldg_Type + 
+           Latitude + Longitude, data = ames_train) %>%
+  step_log(Gr_Liv_Area, base = 10) %>% 
+  step_other(Neighborhood, threshold = 0.01) %>% 
+  step_dummy(all_nominal_predictors()) %>% 
+  step_interact( ~ Gr_Liv_Area:starts_with("Bldg_Type_") ) %>% 
+  step_ns(Latitude, Longitude, deg_free = 20)
+  
+lm_model <- linear_reg() %>% set_engine("lm")
+
+lm_wflow <- 
+  workflow() %>% 
+  add_model(lm_model) %>% 
+  add_recipe(ames_rec)
+
+lm_fit <- fit(lm_wflow, ames_train)
+```
+
+
+# Resampling for Evaluating Performance
+
+## 10.1 The Resubstitution Approach
+
+(bad!)
+
+Try fitting random forest to Ames data:
+
+```{r}
+rf_model <- 
+  rand_forest(trees = 1000) %>% 
+  set_engine("ranger") %>% 
+  set_mode("regression")
+
+rf_wflow <- 
+  workflow() %>% 
+  add_formula(
+    Sale_Price ~ Neighborhood + Gr_Liv_Area + Year_Built + Bldg_Type + 
+      Latitude + Longitude) %>% 
+  add_model(rf_model) 
+
+rf_fit <- rf_wflow %>% fit(data = ames_train)
+```
+
+Compare linear and random forest models by predicting the training set.  This is a "resubstitution" metric
+```{r}
+estimate_perf <- function(model, dat) {
+  # Capture the names of the `model` and `dat` objects
+  cl <- match.call()
+  obj_name <- as.character(cl$model)
+  data_name <- as.character(cl$dat)
+  data_name <- gsub("ames_", "", data_name)
+  
+  # Estimate these metrics:
+  reg_metrics <- metric_set(rmse, rsq)
+  
+  model %>%
+    predict(dat) %>%
+    bind_cols(dat %>% select(Sale_Price)) %>%
+    reg_metrics(Sale_Price, .pred) %>%
+    select(-.estimator) %>%
+    mutate(object = obj_name, data = data_name)
+}
+```
+
+```{r}
+estimate_perf(rf_fit, ames_train)
+```
+
+
+```{r}
+estimate_perf(lm_fit, ames_train)
+```
+what about on the test set?
+
+```{r}
+estimate_perf(rf_fit, ames_test)
+
+```
+
+## 10.2 Resampling Methods
+
+## 10.2.1 Cross-validation
+
+set up the folds:
+
+```{r}
+set.seed(1001)
+ames_folds <- vfold_cv(ames_train, v = 10)
+ames_folds
+```
+
+
+retreive a fold (use `assessment()` instead of `analysis()` to get the other part of the split)
+```{r}
+ames_folds$splits[[1]] %>% analysis() %>% dim()
+
+```
+
+Can do __repeated cross-validation__ to reduce sampling error.
+
+```{r}
+vfold_cv(ames_train, v = 10, repeats = 5)
+```
+
+Doesn't like LOO (why not?  rethinking did...)
+
+__Monte Carlo cross validation__ randomly pick your test and training set each time:
+
+```{r}
+mc_cv(ames_train, prop = 9/10, times = 20)
+
+```
+
+### 10.2.3 Bootstrapping
+
+tends to underestimate performance
+
+```{r}
+bootstraps(ames_train, times = 5)
+
+```
+
+
+### 10.2.4 rolling forecasti8ng origin resampling
+
+for time series data
+
+## 10.3 Estimating performance
+
+use `fit_resamples()`
+
+```{r}
+keep_pred <- control_resamples(save_pred = TRUE, save_workflow = TRUE)
+
+set.seed(1003)
+rf_res <- 
+  rf_wflow %>% 
+  fit_resamples(resamples = ames_folds, control = keep_pred)
+rf_res
+```
+
+```{r}
+collect_metrics(rf_res)
+
+```
+
+Get the predictions from each fold's assessment set:
+```{r}
+assess_res <- collect_predictions(rf_res)
+assess_res
+```
+
+plot it
+```{r}
+assess_res %>% 
+  ggplot(aes(x = Sale_Price, y = .pred)) + 
+  geom_point(alpha = .15) +
+  geom_abline(color = "red") + 
+  coord_obs_pred() + 
+  ylab("Predicted")
+```
+
+which were the poorly predicted houses?
+
+```{r}
+over_predicted <- 
+  assess_res %>% 
+  mutate(residual = Sale_Price - .pred) %>% 
+  arrange(desc(abs(residual))) %>% 
+  slice(1:2)
+over_predicted
+
+ames_train %>% 
+  slice(over_predicted$.row) %>% 
+  select(Gr_Liv_Area, Neighborhood, Year_Built, Bedroom_AbvGr, Full_Bath)
+```
+
+## 10.4 Parallel processing
+
+```{r}
+parallel::detectCores(logical = FALSE)
+parallel::detectCores(logical = TRUE)
+
+```
+
+```{r}
+# Unix and macOS only
+library(doMC)
+registerDoMC(cores = 2)
+
+# Now run fit_resamples()...
+
+registerDoSEQ() # return to single processor
+```
+
+## 10.5 Saving the resampled objects
+
+skimmed it...not running the code
+
+```{r}
+
+```
+
