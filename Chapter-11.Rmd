@@ -1,0 +1,283 @@
+---
+title: "Chapter 11"
+author: "Julin Maloof"
+date: "2024-02-01"
+output: 
+  html_document: 
+    keep_md: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidymodels)
+tidymodels_prefer()
+```
+
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+# rerun prior code
+library(tidymodels)
+data(ames)
+ames <- mutate(ames, Sale_Price = log10(Sale_Price))
+
+set.seed(502)
+ames_split <- initial_split(ames, prop = 0.80, strata = Sale_Price)
+ames_train <- training(ames_split)
+ames_test  <-  testing(ames_split)
+
+ames_rec <- 
+  recipe(Sale_Price ~ Neighborhood + Gr_Liv_Area + Year_Built + Bldg_Type + 
+           Latitude + Longitude, data = ames_train) %>%
+  step_log(Gr_Liv_Area, base = 10) %>% 
+  step_other(Neighborhood, threshold = 0.01) %>% 
+  step_dummy(all_nominal_predictors()) %>% 
+  step_interact( ~ Gr_Liv_Area:starts_with("Bldg_Type_") ) %>% 
+  step_ns(Latitude, Longitude, deg_free = 20)
+
+lm_model <- linear_reg() %>% set_engine("lm")
+
+lm_wflow <- 
+  workflow() %>% 
+  add_model(lm_model) %>% 
+  add_recipe(ames_rec)
+
+lm_fit <- fit(lm_wflow, ames_train)
+
+rf_model <- 
+  rand_forest(trees = 1000) %>% 
+  set_engine("ranger") %>% 
+  set_mode("regression")
+
+rf_wflow <- 
+  workflow() %>% 
+  add_formula(
+    Sale_Price ~ Neighborhood + Gr_Liv_Area + Year_Built + Bldg_Type + 
+      Latitude + Longitude) %>% 
+  add_model(rf_model) 
+
+set.seed(1001)
+ames_folds <- vfold_cv(ames_train, v = 10)
+
+keep_pred <- control_resamples(save_pred = TRUE, save_workflow = TRUE)
+
+set.seed(1003)
+rf_res <- rf_wflow %>% fit_resamples(resamples = ames_folds, control = keep_pred)
+```
+
+# Chapter 11 Comparing models with Resampling
+
+## 11.1 Creating Multiple Models with Workflow Sets
+
+```{r}
+
+
+basic_rec <- 
+  recipe(Sale_Price ~ Neighborhood + Gr_Liv_Area + Year_Built + Bldg_Type + 
+           Latitude + Longitude, data = ames_train) %>%
+  step_log(Gr_Liv_Area, base = 10) %>% 
+  step_other(Neighborhood, threshold = 0.01) %>% 
+  step_dummy(all_nominal_predictors())
+
+interaction_rec <- 
+  basic_rec %>% 
+  step_interact( ~ Gr_Liv_Area:starts_with("Bldg_Type_") ) 
+
+spline_rec <- 
+  interaction_rec %>% 
+  step_ns(Latitude, Longitude, deg_free = 50)
+
+preproc <- 
+  list(basic = basic_rec, 
+       interact = interaction_rec, 
+       splines = spline_rec
+  )
+
+lm_models <- workflow_set(preproc, list(lm = linear_reg()), cross = FALSE)
+lm_models
+
+```
+
+Now resample each model.  Use `workflow_map` to accomplish this.
+
+```{r}
+lm_models <- 
+  lm_models %>% 
+  workflow_map("fit_resamples", 
+               # Options to `workflow_map()`: 
+               seed = 1101, verbose = TRUE,
+               # Options to `fit_resamples()`: 
+               resamples = ames_folds, control = keep_pred)
+
+
+lm_models
+
+```
+
+Get the metrics:
+```{r}
+collect_metrics(lm_models) %>% 
+  filter(.metric == "rmse")
+```
+
+Add the random forest
+```{r}
+four_models <- 
+  as_workflow_set(random_forest = rf_res) %>% 
+  bind_rows(lm_models)
+four_models
+
+```
+
+plot the R2
+```{r}
+library(ggrepel)
+autoplot(four_models, metric = "rsq") +
+  geom_text_repel(aes(label = wflow_id), nudge_x = 1/8, nudge_y = 1/100) +
+  theme(legend.position = "none")
+```
+
+## 11.2 Comparing resampled performance statistics
+
+Test whether additional terms are increasing R2
+
+```{r}
+rsq_indiv_estimates <- 
+  collect_metrics(four_models, summarize = FALSE) %>% 
+  filter(.metric == "rsq") 
+
+rsq_wider <- 
+  rsq_indiv_estimates %>% 
+  select(wflow_id, .estimate, id) %>% 
+  pivot_wider(id_cols = "id", names_from = "wflow_id", values_from = ".estimate")
+
+corrr::correlate(rsq_wider %>% select(-id), quiet = TRUE)
+
+```
+
+The R2s are correlated across folds (since each resampling uses the same folds, this makes sense)
+
+```{r}
+rsq_indiv_estimates %>% 
+  mutate(wflow_id = reorder(wflow_id, .estimate)) %>% 
+  ggplot(aes(x = wflow_id, y = .estimate, group = id, color = id)) + 
+  geom_line(alpha = .5, linewidth = 1.25) + 
+  theme(legend.position = "none")
+```
+
+This correlation casuses bias us towards not finding a difference in the models if not accounted for
+
+## 11.3 Simple Hypothesis Testing Methods
+
+Use hypothesis testing to make formal comparisons between models.  
+
+Use R2 as the outcome, and model as the predictor.
+
+Need to deal with the covariance between folds.  Could be done with a random effect.  Or the simple way is to look at the difference in R2.
+
+Using the pairwise difference to compare two models:
+
+```{r}
+compare_lm <- 
+  rsq_wider %>% 
+  mutate(difference = splines_lm - basic_lm)
+
+lm(difference ~ 1, data = compare_lm) %>% 
+  tidy(conf.int = TRUE) %>% 
+  select(estimate, p.value, starts_with("conf"))
+```
+
+
+```{r}
+# Alternatively, a paired t-test could also be used: 
+rsq_wider %>% 
+  with( t.test(splines_lm, basic_lm, paired = TRUE) ) %>%
+  tidy() %>% 
+  select(estimate, p.value, starts_with("conf"))
+
+```
+## 11.4 Bayesian methods
+
+`perf_mod` compare models in a workflow set using Bayesian methods.  Written to "just work"
+
+```{r}
+library(tidyposterior)
+library(rstanarm)
+
+rsq_anova <-
+  perf_mod(
+    four_models,
+    metric = "rsq",
+    prior_intercept = rstanarm::student_t(df = 1),
+    chains = 4,
+    iter = 5000,
+    seed = 1102
+  )
+```
+
+Get the posteriors
+
+```{r}
+model_post <- 
+  rsq_anova %>% 
+  # Take a random sample from the posterior distribution
+  # so set the seed again to be reproducible. 
+  tidy(seed = 1103) 
+
+glimpse(model_post)
+
+```
+plot posteriors
+
+```{r}
+model_post %>% 
+  mutate(model = forcats::fct_inorder(model)) %>%
+  ggplot(aes(x = posterior)) + 
+  geom_histogram(bins = 50, color = "white", fill = "blue", alpha = 0.4) + 
+  facet_wrap(~ model, ncol = 1)
+```
+or use autoplot
+
+```{r}
+autoplot(rsq_anova) +
+  geom_text_repel(aes(label = workflow), nudge_x = 1/8, nudge_y = 1/100) +
+  theme(legend.position = "none")
+```
+
+To compare two models, compute the difference in posteriors
+```{r}
+rqs_diff <-
+  contrast_models(rsq_anova,
+                  list_1 = "splines_lm",
+                  list_2 = "basic_lm",
+                  seed = 1104)
+
+rqs_diff %>% 
+  as_tibble() %>% 
+  ggplot(aes(x = difference)) + 
+  geom_vline(xintercept = 0, lty = 2) + 
+  geom_histogram(bins = 50, color = "white", fill = "red", alpha = 0.4)
+```
+
+```{r}
+summary(rqs_diff) %>% 
+  select(-starts_with("pract"))
+#> # A tibble: 1 × 6
+#>   contrast               probability    mean   lower  upper  size
+#>   <chr>                        <dbl>   <dbl>   <dbl>  <dbl> <dbl>
+#> 1 splines_lm vs basic_lm        1.00 0.00913 0.00510 0.0132     0
+```
+
+with a practical equivalence distance
+
+```{r}
+summary(rqs_diff, size = 0.02) %>% 
+  select(contrast, starts_with("pract"))
+#> # A tibble: 1 × 4
+#>   contrast               pract_neg pract_equiv pract_pos
+#>   <chr>                      <dbl>       <dbl>     <dbl>
+#> 1 splines_lm vs basic_lm         0           1         0
+```
+
