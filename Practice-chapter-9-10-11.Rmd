@@ -1,0 +1,198 @@
+---
+title: "Practice Chapter 11"
+author: "Julin Maloof"
+date: "2024-02-12"
+output: 
+  html_document: 
+    keep_md: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+For 2/12:
+Return to the Chicago data and Q4 from the previous Chicago assignment.
+
+For Q4 we were predicting ridership from weather PCs, station PCs, and remaining predictors.
+
+Use Cross-fold validation and the model selection techniques shown in chapter 12 to compare models with:
+
+1. All PCs and remaining predictors (same as Q4)
+1a. optional: compare random forest and lm for this full data set
+2. The PCs + the weekend variable (no sports team data)
+3. 1 weather PC, 1 station PC, + the weekend variable
+4. 1 weather PC + the weekend variable
+5. 1 station PC + the weekend variable
+6. the weekend variable only
+
+```{r}
+library(tidyverse)
+library(tidymodels)
+tidymodels_prefer()
+library(workflowsets)
+```
+
+```{r}
+library(modeldata)
+data("Chicago")
+Chicago <- Chicago %>%
+  mutate(weekend = timeDate::isBizday(timeDate::as.timeDate(date)))
+Chicago
+```
+
+```{r}
+set.seed(010324)
+Chicago_split <- initial_split(Chicago, prop = 0.8, strata = ridership)
+c_train <- training(Chicago_split)
+c_test <- testing(Chicago_split)
+```
+
+
+```{r}
+full_recipe <-  recipe(formula = ridership ~ . , data=c_train) %>%
+  update_role(date, new_role = "date") %>%
+  add_role(matches("Home|Away$"), new_role="sports") %>%
+  add_role(matches("^[A-Z]", ignore.case=FALSE), -has_role("sports"), new_role="station") %>%
+  add_role(matches("^[a-z]", ignore.case=FALSE), -date, -weekend, -ridership, new_role="weather") %>%
+  step_normalize(has_role("weather"), has_role("station")) %>%
+  step_pca(has_role("station"), threshold = 0.75, prefix = "S_PC", id="station_pca")  %>%
+  step_pca(has_role("weather"), threshold = 0.75, prefix = "W_PC", id = "weather_pca") 
+
+
+tidy(full_recipe)
+  
+full_recipe %>% prep()
+
+full_recipe %>% prep() %>% bake(c_train[1:10,])
+```
+
+2. The PCs + the weekend variable (no sports team data)
+3. 1 weather PC, 1 station PC, + the weekend variable
+4. 1 weather PC + the weekend variable
+5. 1 station PC + the weekend variable
+6. the weekend variable only
+```{r}
+nosports_recipe <- full_recipe %>%
+  remove_role(has_role("sports"), old_role = "predictor")
+
+prep(nosports_recipe)
+```
+3. 1 weather PC, 1 station PC, + the weekend variable
+```{r}
+recipe3 <- nosports_recipe
+recipe3$steps[[2]] <- update(recipe3$steps[[2]], num_comp=1)
+recipe3$steps[[3]] <- update(recipe3$steps[[3]], num_comp=1)
+
+prep(recipe3)
+```
+
+4. 1 weather PC + the weekend variable
+```{r}
+recipe4 <- recipe3
+tidy(recipe4)
+recipe4$steps <- recipe4$steps[-2]
+tidy(recipe4)
+
+prep(recipe4)
+  
+```
+
+5. 1 station PC + the weekend variable
+```{r}
+recipe5 <- recipe3
+tidy(recipe5)
+recipe5$steps <- recipe5$steps[-3]
+tidy(recipe5)
+
+prep(recipe5)
+
+prep(recipe5)
+```
+
+6. the weekend variable only
+```{r}
+recipe6 <- full_recipe %>%
+  remove_role(-weekend, old_role = "predictor")
+
+prep(recipe6)
+  
+```
+
+
+```{r}
+reg_model <- linear_reg(engine = "lm")
+rf_model <- 
+  rand_forest(trees = 1000) %>% 
+  set_engine("ranger") %>% 
+  set_mode("regression")
+
+wflwset <- workflow_set(preproc = list(full_recipe, nosports_recipe, recipe3, recipe4, recipe5, recipe6),
+                        models = list(reg_model),
+                        cross = TRUE)
+
+wflwset
+```
+
+```{r}
+set.seed(123)
+Chicago_folds <- vfold_cv(c_train, v = 10, strata = ridership)
+keep_pred <- control_resamples(save_pred = TRUE, save_workflow = TRUE)
+
+
+wflwset <- wflwset %>%
+  workflow_map("fit_resamples", 
+               # Options to `workflow_map()`: 
+               seed = 1101, verbose = TRUE,
+               # Options to `fit_resamples()`: 
+               resamples = Chicago_folds, control = keep_pred)
+```
+
+```{r}
+collect_metrics(wflwset) %>% filter(.metric=="rsq")  %>%
+  arrange(desc(mean))
+```
+
+```{r}
+autoplot(wflwset, metric="rsq") +
+  ggrepel::geom_text_repel(aes(label = wflow_id), nudge_x = 1/8, nudge_y = 1/100) +
+  theme(legend.position = "none")
+```
+
+```{r}
+library(tidyposterior)
+library(rstanarm)
+
+# The rstanarm package creates copious amounts of output; those results
+# are not shown here but are worth inspecting for potential issues. The
+# option `refresh = 0` can be used to eliminate the logging. 
+rsq_anova <-
+  perf_mod(
+    wflwset,
+    metric = "rsq",
+    prior_intercept = rstanarm::student_t(df = 1),
+    chains = 4,
+    iter = 5000,
+    seed = 1102
+  )
+```
+
+```{r}
+model_post <- 
+  rsq_anova %>% 
+  # Take a random sample from the posterior distribution
+  # so set the seed again to be reproducible. 
+  tidy(seed = 1103) 
+
+glimpse(model_post)
+
+```
+
+```{r}
+autoplot(rsq_anova) +
+  ggrepel::geom_text_repel(aes(label = workflow), nudge_x = 1/8, nudge_y = 1/100) +
+  theme(legend.position = "none")
+```
+
