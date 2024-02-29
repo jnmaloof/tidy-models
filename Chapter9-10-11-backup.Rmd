@@ -1,10 +1,8 @@
 ---
-title: "Practice Chapter 11"
+title: "Practice Chapter 12"
 author: "Julin Maloof"
 date: "2024-02-12"
-output: 
-  html_document: 
-    keep_md: true
+output: html_document
 ---
 
 ```{r setup, include=FALSE}
@@ -83,7 +81,6 @@ prep(nosports_recipe)
 3. 1 weather PC, 1 station PC, + the weekend variable
 ```{r}
 recipe3 <- nosports_recipe
-tidy(recipe3)
 recipe3$steps[[2]] <- update(recipe3$steps[[2]], num_comp=1)
 recipe3$steps[[3]] <- update(recipe3$steps[[3]], num_comp=1)
 
@@ -134,6 +131,7 @@ wflwset <- workflow_set(preproc = list(full_recipe, nosports_recipe, recipe3, re
                         models = list(reg_model),
                         cross = TRUE)
 
+wflwset
 ```
 
 ```{r}
@@ -156,43 +154,6 @@ collect_metrics(wflwset) %>% filter(.metric=="rsq")  %>%
 ```
 
 ```{r}
-autoplot(wflwset, metric="rsq") +
-  ggrepel::geom_text_repel(aes(label = wflow_id), nudge_x = 1/8, nudge_y = 1/100) +
-  theme(legend.position = "none")
-```
-
-```{r}
-library(tidyposterior)
-library(rstanarm)
-
-# The rstanarm package creates copious amounts of output; those results
-# are not shown here but are worth inspecting for potential issues. The
-# option `refresh = 0` can be used to eliminate the logging. 
-rsq_anova <-
-  perf_mod(
-    wflwset,
-    metric = "rsq",
-    prior_intercept = rstanarm::student_t(df = 1),
-    chains = 4,
-    iter = 5000,
-    seed = 1102
-  )
-```
-
-```{r}
-model_post <- 
-  rsq_anova %>% 
-  # Take a random sample from the posterior distribution
-  # so set the seed again to be reproducible. 
-  tidy(seed = 1103) 
-
-glimpse(model_post)
-
-```
-
-```{r}
-autoplot(rsq_anova) +
-  ggrepel::geom_text_repel(aes(label = workflow), nudge_x = 1/8, nudge_y = 1/100) +
-  theme(legend.position = "none")
+autoplot(wflwset, metric="rsq")
 ```
 

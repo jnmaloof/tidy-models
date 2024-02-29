@@ -1,0 +1,325 @@
+---
+title: "Chapter 13"
+author: "Julin Maloof"
+date: "2024-02-29"
+output: 
+  html_document: 
+    keep_md: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(ggforce)
+library(tidymodels)
+tidymodels_prefer()
+library(doMC)
+registerDoMC(cores = 7)
+```
+
+# 13.1 REGULAR AND NONREGULAR GRIDS
+
+How do we search parameter space?  Can use a grid of specified values.  A regular grid is a factorial combination whereas a nonregular will have a smaller subset of the possible combinations.
+
+Example: neural network.  Can vary the number of hidden units, the penalty, and the epochs.
+
+```{r}
+mlp_spec <- 
+  mlp(hidden_units = tune(), penalty = tune(), epochs = tune()) %>% 
+  set_engine("nnet", trace = 0) %>% 
+  set_mode("classification")
+```
+
+Use `extract parameter dials` to get what is going to be tuned
+
+```{r}
+mlp_param <- extract_parameter_set_dials(mlp_spec)
+mlp_param %>% extract_parameter_dials("hidden_units")
+```
+
+
+```{r}
+mlp_param %>% extract_parameter_dials("penalty")
+
+```
+
+
+```{r}
+mlp_param %>% extract_parameter_dials("epochs")
+
+```
+
+Can create your own regular grid with `crossing` or `expand_grid` or use the smart function `grid_regular`
+
+```{r}
+mlp_param %>% 
+  grid_regular(levels = c(hidden_units = 3, penalty = 2, epochs = 2))
+
+```
+
+### nonregular grid
+
+Could use random, but this is suboptimal.  maximum entropy or latin hypercubes are better.
+
+```{r, fig.asp=1}
+set.seed(1303)
+mlp_param %>% 
+  grid_latin_hypercube(size = 20, original = FALSE) %>% 
+  ggplot(aes(x = .panel_x, y = .panel_y)) + 
+  geom_point() +
+  geom_blank() +
+  facet_matrix(vars(hidden_units, penalty, epochs), layer.diag = 2) + 
+  labs(title = "Latin Hypercube design with 20 candidates") 
+```
+
+## 13.2 evaluating the grid
+
+Example data set: cancer image classification
+
+```{r}
+data(cells)
+cells <- cells %>% select(-case)
+set.seed(1304)
+cell_folds <- vfold_cv(cells)
+```
+
+set up a recipe
+
+```{r}
+mlp_rec <-
+  recipe(class ~ ., data = cells) %>%
+  step_YeoJohnson(all_numeric_predictors()) %>% # removes skew in the data
+  step_normalize(all_numeric_predictors()) %>% 
+  step_pca(all_numeric_predictors(), num_comp = tune()) %>% 
+  step_normalize(all_numeric_predictors())
+
+mlp_wflow <- 
+  workflow() %>% 
+  add_model(mlp_spec) %>% 
+  add_recipe(mlp_rec)
+```
+
+update the ranges that we will tune over
+
+```{r}
+mlp_param <- 
+  mlp_wflow %>% 
+  extract_parameter_set_dials() %>% 
+  update(
+    epochs = epochs(c(50, 200)),
+    num_comp = num_comp(c(0, 40)) # 0 PCA components doesn't do a transformation at all
+  )
+```
+
+Tune it (using a regular grid)
+```{r}
+roc_res <- metric_set(roc_auc)
+set.seed(1305)
+mlp_reg_tune <-
+  mlp_wflow %>%
+  tune_grid(
+    cell_folds,
+    grid = mlp_param %>% grid_regular(levels = c(hidden_units=3, penalty=5, epochs=3, num_comp=3)),
+    metrics = roc_res
+  )
+mlp_reg_tune
+
+```
+
+```{r, fig.asp=1}
+autoplot(mlp_reg_tune) + 
+  scale_color_viridis_d(direction = -1) + 
+  theme(legend.position = "top")
+```
+```{r}
+show_best(mlp_reg_tune) %>% select(-.estimator)
+
+```
+
+now with a space-filling design:
+
+```{r}
+set.seed(1306)
+mlp_sfd_tune <-
+  mlp_wflow %>%
+  tune_grid(
+    cell_folds,
+    grid = 20, # or specify a grid function.  By default this will use maximum entropy.
+    # Pass in the parameter object to use the appropriate range: 
+    param_info = mlp_param,
+    metrics = roc_res
+  )
+mlp_sfd_tune
+```
+```{r}
+autoplot(mlp_sfd_tune)
+```
+hard to tell because for these marginal plots the other values are being averaged over.  But contrary to what the book says, it looks like more regularization is giving better results.
+
+But in any case:
+
+```{r}
+show_best(mlp_sfd_tune) %>% select(-.estimator)
+
+```
+more clear with more samples?
+
+now with a space-filling design:
+
+```{r}
+set.seed(1306)
+mlp_sfd_tune <-
+  mlp_wflow %>%
+  tune_grid(
+    cell_folds,
+    grid = 100, # or specify a grid function.  By default this will use maximum entropy.
+    # Pass in the parameter object to use the appropriate range: 
+    param_info = mlp_param,
+    metrics = roc_res
+  )
+mlp_sfd_tune
+```
+
+```{r}
+autoplot(mlp_sfd_tune)
+```
+hard to tell because for these marginal plots the other values are being averaged over.  But contrary to what the book says, it looks like more regularization is giving better results.
+
+But in any case:
+
+```{r}
+show_best(mlp_sfd_tune) %>% select(-.estimator)
+
+```
+
+
+Try it with Bayes
+
+```{r}
+set.seed(1306)
+mlp_sfd_tune <-
+  mlp_wflow %>%
+  tune_bayes(
+    cell_folds,
+    iter = 20, 
+    initial = 10,
+    # Pass in the parameter object to use the appropriate range: 
+    param_info = mlp_param,
+    metrics = roc_res
+  )
+mlp_sfd_tune
+```
+
+```{r}
+autoplot(mlp_sfd_tune)
+show_best(mlp_sfd_tune) %>% select(-.estimator)
+
+```
+
+
+
+## 13.3 finalzing the model
+
+Get the best parameters
+
+```{r}
+select_best(mlp_reg_tune, metric = "roc_auc")
+
+```
+```{r}
+logistic_param <- select_best(mlp_reg_tune, metric = "roc_auc") %>% select(-.config)
+
+
+final_mlp_wflow <- 
+  mlp_wflow %>% 
+  finalize_workflow(logistic_param)
+final_mlp_wflow
+
+```
+do final fit
+
+```{r}
+final_mlp_fit <- 
+  final_mlp_wflow %>% 
+  fit(cells)
+```
+
+## 13.4 TOOLS FOR CREATING TUNING SPECIFICATIONS
+
+```{r}
+library(usemodels)
+
+load("ames_test_train.Rdata")
+
+use_xgboost(Sale_Price ~ Neighborhood + Gr_Liv_Area + Year_Built + Bldg_Type + 
+              Latitude + Longitude, 
+            data = ames_train,
+            # Add comments explaining some of the code:
+            verbose = TRUE)
+```
+## 13.5 TOOLS FOR EFFICIENT GRID SEARCH
+  
+### 13.5.1 SUBMODEL OPTIMIZATION
+
+Often different paramters can be tested from a single fit.  Examples include regularization, boosting iterations, number of components in a PLS
+
+example:
+
+```{r}
+c5_spec <- 
+  boost_tree(trees = tune()) %>% 
+  set_engine("C5.0") %>% 
+  set_mode("classification")
+
+set.seed(1307)
+system.time(c5_tune <- c5_spec %>%
+  tune_grid(
+    class ~ .,
+    resamples = cell_folds,
+    grid = data.frame(trees = 1:100),
+    metrics = roc_res
+  ))
+
+autoplot(c5_tune)
+```
+
+### 13.5.2 Parallel processing
+
+Can loop over folds, tuning parameters, or evertyhing.  Set this in "parallel_over" in control_grid (but it will choose "resamples" automatically if not specified and resamples are present)
+
+### 13.5.3 BENCHMARKING BOOSTED TREES
+
+In the demo, parallel over everything had little benefit for the simple cases and was worse than parallel_over resampling when there was a heavy pre-processing step.
+
+### 13.5.4 ACCESS TO GLOBAL VARIABLES
+
+For parallel processing access global variables with `!!` or `!!!` so that they get evaluated in advance
+
+### 13.5.5 RACING METHODS
+
+Compare performance after just some folds and then select the best ones to move forward with:
+
+```{r}
+library(finetune)
+
+set.seed(1308)
+mlp_sfd_race <-
+  mlp_wflow %>%
+  tune_race_anova(
+    cell_folds,
+    grid = 20,
+    param_info = mlp_param,
+    metrics = roc_res,
+    control = control_race(verbose_elim = TRUE)
+  )
+```
+
+```{r}
+autoplot(mlp_sfd_race)
+
+show_best(mlp_sfd_race, n = 10)
+
+```
+
