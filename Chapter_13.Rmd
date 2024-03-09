@@ -259,6 +259,20 @@ use_xgboost(Sale_Price ~ Neighborhood + Gr_Liv_Area + Year_Built + Bldg_Type +
             # Add comments explaining some of the code:
             verbose = TRUE)
 ```
+```{r}
+xgboost_recipe <- 
+  recipe(formula = Sale_Price ~ Neighborhood + Gr_Liv_Area + Year_Built + Bldg_Type + 
+    Latitude + Longitude, data = ames_train) %>% 
+  step_zv(all_predictors()) 
+
+xgboost_spec <- 
+  boost_tree(trees = tune(), min_n = tune(), tree_depth = tune(), learn_rate = tune(), 
+    loss_reduction = tune(), sample_size = tune()) %>% 
+  set_mode("classification") %>% 
+  set_engine("xgboost") 
+```
+
+
 ## 13.5 TOOLS FOR EFFICIENT GRID SEARCH
   
 ### 13.5.1 SUBMODEL OPTIMIZATION
