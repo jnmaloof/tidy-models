@@ -1,0 +1,157 @@
+---
+title: "Chapter_14"
+author: "Julin Maloof"
+date: "2024-03-09"
+output:
+  html_document:
+    keep_md: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Chapter 13 code:
+```{r}
+library(tidymodels)
+
+data(cells)
+cells <- cells %>% select(-case)
+
+set.seed(1304)
+cell_folds <- vfold_cv(cells)
+
+roc_res <- metric_set(roc_auc)
+```
+
+# 14.1 SVM model
+
+```{r}
+library(tidymodels)
+library(finetune)
+tidymodels_prefer()
+library(doMC)
+registerDoMC(cores = 8)
+
+svm_rec <- 
+  recipe(class ~ ., data = cells) %>%
+  step_YeoJohnson(all_numeric_predictors()) %>%
+  step_normalize(all_numeric_predictors())
+
+svm_spec <- 
+  svm_rbf(cost = tune(), rbf_sigma = tune()) %>% 
+  set_engine("kernlab") %>% 
+  set_mode("classification")
+
+svm_wflow <- 
+  workflow() %>% 
+  add_model(svm_spec) %>% 
+  add_recipe(svm_rec)
+```
+
+tuning parameter defaults
+```{r}
+cost()
+
+rbf_sigma()
+
+```
+update the parameter for rbf_sigma
+```{r}
+svm_param <- 
+  svm_wflow %>% 
+  extract_parameter_set_dials() %>% 
+  update(rbf_sigma = rbf_sigma(c(-7, -1)))
+```
+
+do an initial grid search.  This will serve as a starting point for the iterative search
+```{r}
+set.seed(1401)
+start_grid <- 
+  svm_param %>% 
+  update(
+    cost = cost(c(-6, 1)),
+    rbf_sigma = rbf_sigma(c(-6, -4))
+  ) %>% 
+  grid_regular(levels = 2)
+
+set.seed(1402)
+svm_initial <- 
+  svm_wflow %>% 
+  tune_grid(resamples = cell_folds, grid = start_grid, metrics = roc_res)
+
+collect_metrics(svm_initial)
+
+```
+
+# 14.2 tune_bayes
+
+How to choise next parameer values to test?
+
+A gaussian process model models an output (in this case a fit metric) as a function of a multivariate Gaussian distribution (in this case of the tuning parameters).  With a few data points in can predict the mean and variance (uncertainity) at other parameter values.
+
+We could pick the next parameters based on choosing the highest predicted mean, the highest variance, or expected improvement (area under the predicted distribution that is better than current best estimate).  Default is expected improvement.  IF we did mean only, we wouldn't explore areas far away from our current paraemeters.  This can be good for refinement but not at initial stages.
+
+## 14.2.3 Tune Bayes example
+
+```{r}
+ctrl <- control_bayes(verbose = TRUE, verbose_iter = TRUE)
+
+set.seed(1403) # even so, get different results different times
+svm_bo <-
+  svm_wflow %>%
+  tune_bayes(
+    resamples = cell_folds,
+    metrics = roc_res,
+    initial = svm_initial,
+    param_info = svm_param,
+    iter = 25,
+    control = ctrl
+  )
+```
+
+```{r}
+collect_metrics(svm_bo)
+```
+
+```{r}
+show_best(svm_bo)
+```
+
+```{r}
+autoplot(svm_bo, type = "performance")
+autoplot(svm_bo, type = "parameters")
+```
+
+# 14.3 Simulated Annealing
+
+Tuning parameters are rescaled between 0 and 1.  A local search space is defined by a radius parameter (typically .1 or .15) that defines where new proposed parameters can come from.  c defines the cooling; higher values "cool" faster, meaning that exploration of bad areas is less likely.
+
+```{r}
+ctrl_sa <- control_sim_anneal(verbose = TRUE, no_improve = 10L)
+
+set.seed(1404)
+svm_sa <-
+  svm_wflow %>%
+  tune_sim_anneal(
+    resamples = cell_folds,
+    metrics = roc_res,
+    initial = svm_initial,
+    param_info = svm_param,
+    iter = 50,
+    control = ctrl_sa
+  )
+```
+
+```{r}
+show_best(svm_bo)
+show_best(svm_sa)
+```
+
+```{r}
+autoplot(svm_sa)
+```
+```{r}
+autoplot(svm_sa, type="performance")
+```
+
