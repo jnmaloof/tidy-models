@@ -86,7 +86,7 @@ collect_metrics(svm_initial)
 
 # 14.2 tune_bayes
 
-How to choise next parameer values to test?
+How to choose next parameter values to test?
 
 A gaussian process model models an output (in this case a fit metric) as a function of a multivariate Gaussian distribution (in this case of the tuning parameters).  With a few data points in can predict the mean and variance (uncertainity) at other parameter values.
 
