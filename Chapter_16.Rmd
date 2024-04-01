@@ -1,0 +1,328 @@
+---
+title: "Chapter 16"
+author: "Julin Maloof"
+date: "2024-03-19"
+output: 
+  html_document: 
+    keep_md: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Dimensionality Reduction
+
+## 16.2 A PICTURE IS WORTH A THOUSAND… BEANS
+
+```{r}
+library(tidymodels)
+tidymodels_prefer()
+library(beans)
+library(doMC)
+registerDoMC(cores = 8)
+```
+```{r}
+set.seed(1601)
+bean_split <- initial_validation_split(beans, strata = class, prop = c(0.75, 0.125))
+#> Warning: Too little data to stratify.
+#> • Resampling will be unstratified.
+bean_split
+#> <Training/Validation/Testing/Total>
+#> <10206/1702/1703/13611>
+
+# Return data frames:
+bean_train <- training(bean_split)
+bean_test <- testing(bean_split)
+bean_validation <- validation(bean_split)
+
+
+set.seed(1602)
+# Return an 'rset' object to use with the tune functions:
+bean_val <- validation_set(bean_split)
+bean_val$splits[[1]]
+#> <Training/Validation/Total>
+#> <10206/1702/11908>
+```
+
+```{r}
+library(corrplot)
+tmwr_cols <- colorRampPalette(c("#91CBD765", "#CA225E"))
+bean_train %>% 
+  select(-class) %>% 
+  cor() %>% 
+  corrplot(col = tmwr_cols(200), tl.col = "black", method = "ellipse")
+```
+
+## 16.3 A starting recipe
+
+```{r}
+library(bestNormalize)
+bean_rec <-
+  # Use the training data from the bean_val split object
+  recipe(class ~ ., data = bean_train) %>%
+  step_zv(all_numeric_predictors()) %>%
+  step_orderNorm(all_numeric_predictors()) %>% 
+  step_normalize(all_numeric_predictors())
+```
+
+## 16.4 recipe in the wild
+
+prep for a recipe is like fit for a model...it gits the recipe using the training data.  You can then bake it to apply it to new data
+
+```{r}
+bean_rec_trained <- prep(bean_rec)
+bean_rec_trained
+
+```
+
+pass verbpse argument to help troubleshoot
+
+```{r, error=TRUE}
+bean_rec_trained %>% 
+  step_dummy(cornbread) %>%  # <- not a real predictor
+  prep(verbose = TRUE)
+```
+log changes can also be helpful
+
+```{r}
+show_variables <- 
+  bean_rec %>% 
+  prep(log_changes = TRUE)
+```
+### 16.4.2 baking for new data
+```{r}
+bean_val_processed <- bake(bean_rec_trained, new_data = bean_validation)
+```
+
+```{r}
+library(patchwork)
+p1 <- 
+  bean_validation %>% 
+  ggplot(aes(x = area)) + 
+  geom_histogram(bins = 30, color = "white", fill = "blue", alpha = 1/3) + 
+  ggtitle("Original validation set data")
+
+p2 <- 
+  bean_val_processed %>% 
+  ggplot(aes(x = area)) + 
+  geom_histogram(bins = 30, color = "white", fill = "red", alpha = 1/3) + 
+  ggtitle("Processed validation set data")
+
+p1 + p2
+```
+
+## 16.5 feature extractions
+
+A function to test and plot results of recipes
+
+```{r}
+library(ggforce)
+plot_validation_results <- function(recipe, dat = bean_validation) {
+  recipe %>%
+    # Estimate any additional steps
+    prep() %>%
+    # Process the data (the validation set by default)
+    bake(new_data = dat) %>%
+    # Create the scatterplot matrix
+    ggplot(aes(x = .panel_x, y = .panel_y, color = class, fill = class)) +
+    geom_point(alpha = 0.4, size = 0.5) +
+    geom_autodensity(alpha = .3) +
+    facet_matrix(vars(-class), layer.diag = 2) + 
+    scale_color_brewer(palette = "Dark2") + 
+    scale_fill_brewer(palette = "Dark2")
+}
+```
+
+
+### 16.2.1 PCA
+
+```{r}
+bean_rec_trained %>%
+  step_pca(all_numeric_predictors(), num_comp = 4) %>%
+  plot_validation_results() + 
+  ggtitle("Principal Component Analysis")
+```
+
+Plot the loadings
+
+```{r}
+library(learntidymodels)
+bean_rec_trained %>%
+  step_pca(all_numeric_predictors(), num_comp = 4) %>% 
+  prep() %>% 
+  plot_top_loadings(component_number <= 4, n = 5) + 
+  scale_fill_brewer(palette = "Paired") +
+  ggtitle("Principal Component Analysis")
+```
+What if we want to get the loadings ourselves?
+
+```{r}
+bean_prep <- bean_rec_trained %>%
+  step_pca(all_numeric_predictors(), num_comp = 4) %>% 
+  prep() 
+```
+
+```{r}
+map(bean_prep$steps, ~ .x$id)
+```
+
+```{r}
+bean_prep$steps[[4]]
+```
+
+```{r}
+bean_prep$steps[[4]]$res %>% summary
+```
+
+### 16.5.2 PLS
+
+supervised
+
+```{r}
+bean_rec_trained %>%
+  step_pls(all_numeric_predictors(), outcome = "class", num_comp = 4) %>%
+  plot_validation_results() + 
+  ggtitle("Partial Least Squares")
+```
+
+```{r}
+bean_rec_trained %>%
+  step_pls(all_numeric_predictors(), outcome = "class", num_comp = 4) %>%
+  prep() %>% 
+  plot_top_loadings(component_number <= 4, n = 5, type = "pls") + 
+  scale_fill_brewer(palette = "Paired") +
+  ggtitle("Partial Least Squares")
+```
+### 16.5.3 ICA
+
+```{r}
+bean_rec_trained %>%
+  step_ica(all_numeric_predictors(), num_comp = 4) %>%
+  plot_validation_results() + 
+  ggtitle("Independent Component Analysis")
+```
+
+### 16.5.4 UMAP
+
+```{r}
+library(embed)
+bean_rec_trained %>%
+  step_umap(all_numeric_predictors(), num_comp = 4) %>%
+  plot_validation_results() +
+  ggtitle("UMAP")
+```
+```{r}
+bean_rec_trained %>%
+  step_umap(all_numeric_predictors(), outcome = "class", num_comp = 4) %>%
+  plot_validation_results() +
+  ggtitle("UMAP (supervised)")
+```
+## 16.6 models
+
+models
+```{r}
+library(baguette)
+library(discrim)
+
+mlp_spec <-
+  mlp(hidden_units = tune(), penalty = tune(), epochs = tune()) %>%
+  set_engine('nnet') %>%
+  set_mode('classification')
+
+bagging_spec <-
+  bag_tree() %>%
+  set_engine('rpart') %>%
+  set_mode('classification')
+
+fda_spec <-
+  discrim_flexible(
+    prod_degree = tune()
+  ) %>%
+  set_engine('earth')
+
+rda_spec <-
+  discrim_regularized(frac_common_cov = tune(), frac_identity = tune()) %>%
+  set_engine('klaR')
+
+bayes_spec <-
+  naive_Bayes() %>%
+  set_engine('klaR')
+```
+
+recipes
+```{r}
+bean_rec <-
+  recipe(class ~ ., data = bean_train) %>%
+  step_zv(all_numeric_predictors()) %>%
+  step_orderNorm(all_numeric_predictors()) %>%
+  step_normalize(all_numeric_predictors())
+
+pls_rec <- 
+  bean_rec %>% 
+  step_pls(all_numeric_predictors(), outcome = "class", num_comp = tune())
+
+umap_rec <-
+  bean_rec %>%
+  step_umap(
+    all_numeric_predictors(),
+    outcome = "class",
+    num_comp = tune(),
+    neighbors = tune(),
+    min_dist = tune()
+  )
+```
+
+workflowset
+
+```{r}
+
+
+ctrl <- control_grid(parallel_over = "everything")
+bean_res <- 
+  workflow_set(
+    preproc = list(basic = class ~., pls = pls_rec, umap = umap_rec), 
+    models = list(bayes = bayes_spec, fda = fda_spec,
+                  rda = rda_spec, bag = bagging_spec,
+                  mlp = mlp_spec)
+  ) %>% 
+  workflow_map(
+    verbose = TRUE,
+    seed = 1603,
+    resamples = bean_val,
+    grid = 10,
+    metrics = metric_set(roc_auc),
+    control = ctrl
+  )
+```
+
+rank
+```{r}
+rankings <- 
+  rank_results(bean_res, select_best = TRUE) %>% 
+  mutate(method = map_chr(wflow_id, ~ str_split(.x, "_", simplify = TRUE)[1])) 
+
+tidymodels_prefer()
+filter(rankings, rank <= 10) %>% dplyr::select(rank, mean, model, method)
+
+```
+
+finalize it
+```{r}
+rda_res <- 
+  bean_res %>% 
+  extract_workflow("pls_rda") %>% 
+  finalize_workflow(
+    bean_res %>% 
+      extract_workflow_set_result("pls_rda") %>% 
+      select_best(metric = "roc_auc")
+  ) %>% 
+  last_fit(split = bean_split, metrics = metric_set(roc_auc))
+
+rda_wflow_fit <- extract_workflow(rda_res)
+```
+
+```{r}
+collect_metrics(rda_res)
+```
+
