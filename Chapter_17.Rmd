@@ -1,0 +1,187 @@
+---
+title: "Chapter 17"
+output: 
+  html_document: 
+    keep_md: true
+date: "2024-04-05"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidymodels)
+data(ames)
+ames <- mutate(ames, Sale_Price = log10(Sale_Price))
+
+set.seed(502)
+ames_split <- initial_split(ames, prop = 0.80, strata = Sale_Price)
+ames_train <- training(ames_split)
+ames_test  <-  testing(ames_split)
+
+ames_rec <- 
+  recipe(Sale_Price ~ Neighborhood + Gr_Liv_Area + Year_Built + Bldg_Type + 
+           Latitude + Longitude, data = ames_train) %>%
+  step_log(Gr_Liv_Area, base = 10) %>% 
+  step_other(Neighborhood, threshold = 0.01) %>% 
+  step_dummy(all_nominal_predictors()) %>% 
+  step_interact( ~ Gr_Liv_Area:starts_with("Bldg_Type_") ) %>% 
+  step_ns(Latitude, Longitude, deg_free = 20)
+  
+lm_model <- linear_reg() %>% set_engine("lm")
+
+lm_wflow <- 
+  workflow() %>% 
+  add_model(lm_model) %>% 
+  add_recipe(ames_rec)
+
+lm_fit <- fit(lm_wflow, ames_train)
+```
+
+# Chapter 17 Encoding Categorical Data
+
+Focus on alternatives to dummy variable encoding
+
+Packages `embed` and `textrecipes`
+
+## 17.1 is an encoding necessary?
+
+Some models do not need recoding: e.g. tree-based models and Naive Bayes models.
+
+Generally transforming when it wasn't required did not improve model fit but did increase training time.
+
+## 17.2 Encoding Ordinal predictors
+
+Default in base R is polynomial, but this isn't so helpful
+
+Try `step_unorder` or `step_ordinalscore`
+
+## 17.3 Using the outcome for encoding predictors
+
+Huh: calculate the median or mean for each level of the factor and then use those as the predictor values.  Double dipping?
+
+Best if you have many levels
+
+`step_lencode_glm`, `step_lencode_mixed` and `step_lenconde_bayes`
+
+```{r}
+library(embed)
+
+ames_glm <- 
+  recipe(Sale_Price ~ Neighborhood + Gr_Liv_Area + Year_Built + Bldg_Type + 
+           Latitude + Longitude, data = ames_train) %>%
+  step_log(Gr_Liv_Area, base = 10) %>% 
+  step_lencode_glm(Neighborhood, outcome = vars(Sale_Price)) %>%
+  step_dummy(all_nominal_predictors()) %>% 
+  step_interact( ~ Gr_Liv_Area:starts_with("Bldg_Type_") ) %>% 
+  step_ns(Latitude, Longitude, deg_free = 20)
+
+ames_glm
+```
+
+```{r}
+glm_estimates <-
+  prep(ames_glm) %>%
+  tidy(number = 2)
+
+glm_estimates
+```
+
+For a new neighborhood:
+
+```{r}
+glm_estimates %>%
+  filter(level == "..new")
+```
+
+Use with care and estimate on training set only.  
+
+## 17.3.1 Effect Encodings with Partial Pooling
+
+helps with estimations for categories with little info...shrink towards mean.
+
+```{r}
+ames_mixed <- 
+  recipe(Sale_Price ~ Neighborhood + Gr_Liv_Area + Year_Built + Bldg_Type + 
+           Latitude + Longitude, data = ames_train) %>%
+  step_log(Gr_Liv_Area, base = 10) %>% 
+  step_lencode_mixed(Neighborhood, outcome = vars(Sale_Price)) %>%
+  step_dummy(all_nominal_predictors()) %>% 
+  step_interact( ~ Gr_Liv_Area:starts_with("Bldg_Type_") ) %>% 
+  step_ns(Latitude, Longitude, deg_free = 20)
+
+ames_mixed
+```
+
+```{r}
+mixed_estimates <-
+  prep(ames_mixed) %>%
+  tidy(number = 2)
+
+mixed_estimates
+```
+
+Compare:
+
+```{r}
+glm_estimates %>%
+  rename(`no pooling` = value) %>%
+  left_join(
+    mixed_estimates %>%
+      rename(`partial pooling` = value), by = "level"
+  ) %>%
+  left_join(
+    ames_train %>% 
+      count(Neighborhood) %>% 
+      mutate(level = as.character(Neighborhood))
+  ) %>%
+  ggplot(aes(`no pooling`, `partial pooling`, size = sqrt(n))) +
+  geom_abline(color = "gray50", lty = 2) +
+  geom_point(alpha = 0.7) +
+  coord_fixed()
+#> Warning: Removed 1 rows containing missing values (`geom_point()`).
+```
+
+## 17.4 Feature Hashing
+
+Why does this help?  Isn't it just randomly assigning a number to the category?
+```{r}
+library(rlang)
+
+ames_hashed <-
+  ames_train %>%
+  mutate(Hash = map_chr(Neighborhood, hash))
+
+ames_hashed %>%
+  select(Neighborhood, Hash)
+
+```
+
+Reducing the number of hashed values:
+
+```{r}
+ames_hashed %>%
+  ## first make a smaller hash for integers that R can handle
+  mutate(Hash = strtoi(substr(Hash, 26, 32), base = 16L),  
+         ## now take the modulo
+         Hash = Hash %% 16) %>%
+  select(Neighborhood, Hash)
+```
+
+In a recipe
+
+```{r}
+library(textrecipes)
+ames_hash <- 
+  recipe(Sale_Price ~ Neighborhood + Gr_Liv_Area + Year_Built + Bldg_Type + 
+           Latitude + Longitude, data = ames_train) %>%
+  step_log(Gr_Liv_Area, base = 10) %>% 
+  step_dummy_hash(Neighborhood, signed = FALSE, num_terms = 16L) %>%
+  step_dummy(all_nominal_predictors()) %>% 
+  step_interact( ~ Gr_Liv_Area:starts_with("Bldg_Type_") ) %>% 
+  step_ns(Latitude, Longitude, deg_free = 20)
+
+ames_hash
+```
+
