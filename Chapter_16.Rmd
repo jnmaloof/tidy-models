@@ -328,4 +328,7 @@ rda_wflow_fit <- extract_workflow(rda_res)
 ```{r}
 collect_metrics(rda_res)
 ```
+```{r}
+save.image("Chapter16.Rdata")
+```
 
