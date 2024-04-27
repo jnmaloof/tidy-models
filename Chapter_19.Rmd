@@ -1,0 +1,266 @@
+---
+title: "Chapter_19"
+output: 
+  html_document: 
+    keep_md: true
+date: "2024-04-27"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+## When should you trust your predictions?
+
+Two methods:
+
+* Equivocal Zones: use the predicted values to alert the user when it might be suspect
+* Applicability: Use the predictors to measure the amount of extrapolation
+
+## 19.1 Equivocal Results
+
+This is a place in the prediction when either outcome has a relatively high outcome of being predicted.
+
+Simulate two classes and two predictors
+
+```{r}
+library(tidymodels)
+tidymodels_prefer()
+
+simulate_two_classes <- 
+  function (n, error = 0.1, eqn = quote(-1 - 2 * x - 0.2 * x^2 + 2 * y^2))  {
+    # Slightly correlated predictors
+    sigma <- matrix(c(1, 0.7, 0.7, 1), nrow = 2, ncol = 2)
+    dat <- MASS::mvrnorm(n = n, mu = c(0, 0), Sigma = sigma)
+    colnames(dat) <- c("x", "y")
+    cls <- paste0("class_", 1:2)
+    dat <- 
+      as_tibble(dat) %>% 
+      mutate(
+        linear_pred = !!eqn,
+        # Add some misclassification noise
+        linear_pred = linear_pred + rnorm(n, sd = error),
+        prob = binomial()$linkinv(linear_pred),
+        class = ifelse(prob > runif(n), cls[1], cls[2]),
+        class = factor(class, levels = cls)
+      )
+    dplyr::select(dat, x, y, class)
+  }
+
+set.seed(1901)
+training_set <- simulate_two_classes(200)
+testing_set  <- simulate_two_classes(50)
+```
+
+Model
+```{r}
+two_class_mod <- 
+  logistic_reg() %>% 
+  set_engine("stan", seed = 1902) %>% 
+  fit(class ~ . + I(x^2)+ I(y^2), data = training_set)
+print(two_class_mod, digits = 3)
+
+```
+Can remove some results that are close to equivocable,  library `probably` helps us figure out the equivocable zones
+
+test set predictions:
+```{r}
+test_pred <- augment(two_class_mod, testing_set)
+test_pred %>% head()
+
+```
+
+```{r}
+library(probably)
+
+lvls <- levels(training_set$class)
+
+test_pred <- 
+  test_pred %>% 
+  mutate(.pred_with_eqz = make_two_class_pred(.pred_class_1, lvls, buffer = 0.15))
+
+test_pred %>% count(.pred_with_eqz)
+
+```
+
+[EQ] cleverly is not a factor level and gets converted to NA when computing stats:
+
+```{r}
+test_pred %>% conf_mat(class, .pred_class)
+
+test_pred %>% conf_mat(class, .pred_with_eqz)
+
+
+```
+
+Do the eQ zones help?
+
+```{r}
+# A function to change the buffer then compute performance.
+eq_zone_results <- function(buffer) {
+  test_pred <- 
+    test_pred %>% 
+    mutate(.pred_with_eqz = make_two_class_pred(.pred_class_1, lvls, buffer = buffer))
+  acc <- test_pred %>% accuracy(class, .pred_with_eqz)
+  rep_rate <- reportable_rate(test_pred$.pred_with_eqz)
+  tibble(accuracy = acc$.estimate, reportable = rep_rate, buffer = buffer)
+}
+
+# Evaluate a sequence of buffers and plot the results. 
+map(seq(0, .1, length.out = 40), eq_zone_results) %>% 
+  list_rbind() %>% 
+  pivot_longer(c(-buffer), names_to = "statistic", values_to = "value") %>% 
+  ggplot(aes(x = buffer, y = value, lty = statistic)) + 
+  geom_step(linewidth = 1.2, alpha = 0.8) + 
+  labs(y = NULL, lty = NULL)
+```
+Not a huge difference in this case
+
+What if we used the standard error of prediction instead of the probability?  With the Bayes formula we have a bilt in estimate of the standard error via the posterior predictions.
+
+Use "pred_int" to get prediction intervals and std error
+
+```{r}
+test_pred <- 
+  test_pred %>% 
+  bind_cols(
+    predict(two_class_mod, testing_set, type = "pred_int", std_error = TRUE)
+  )
+
+head(test_pred)
+```
+
+It would have been nice if they showed us how to use this in the probably library, but maybe there is not a function.
+
+Anyway, can filter by .std_error column.
+
+Does this actually do better?
+
+```{r}
+eqplot <- tibble(stderrCutoff = seq(0.5,0.4, -.001)) %>%
+  mutate(  acc = map(stderrCutoff, ~ {test_pred %>% filter(.std_error < .x) %>% accuracy(class, .pred_class)}),
+           rep_rate = map_dbl(stderrCutoff, ~ sum(test_pred$.std_error < .x)/nrow(test_pred))
+  ) %>% unnest(cols=acc) %>%
+  select(stderrCutoff, acc=.estimate, rep_rate)
+
+eqplot %>% pivot_longer(cols=c(rep_rate, acc)) %>%
+  ggplot(aes(x = stderrCutoff, y = value, lty = name)) + 
+  geom_step(linewidth = 1.2, alpha = 0.8) + 
+  labs(y = NULL, lty = NULL) +
+  scale_x_reverse()
+```
+Doesn't really help
+
+## 19.2 Applicability
+
+Use Chicago ridership data
+
+test set from last two weeks
+
+```{r}
+## loads both `Chicago` data set as well as `stations`
+data(Chicago)
+
+Chicago <- Chicago %>% select(ridership, date, one_of(stations))
+
+n <- nrow(Chicago)
+
+Chicago_train <- Chicago %>% slice(1:(n - 14))
+Chicago_test  <- Chicago %>% slice((n - 13):n)
+```
+
+
+Fit a PLS model
+
+```{r}
+base_recipe <-
+  recipe(ridership ~ ., data = Chicago_train) %>%
+  # Create date features
+  step_date(date) %>%
+  step_holiday(date, keep_original_cols = FALSE) %>%
+  # Create dummy variables from factor columns
+  step_dummy(all_nominal()) %>%
+  # Remove any columns with a single unique value
+  step_zv(all_predictors()) %>%
+  step_normalize(!!!stations)%>%
+  step_pls(!!!stations, num_comp = 10, outcome = vars(ridership))
+
+lm_spec <-
+  linear_reg() %>%
+  set_engine("lm") 
+
+lm_wflow <-
+  workflow() %>%
+  add_recipe(base_recipe) %>%
+  add_model(lm_spec)
+
+set.seed(1902)
+lm_fit <- fit(lm_wflow, data = Chicago_train)
+```
+
+predictions
+
+```{r}
+res_test <-
+  predict(lm_fit, Chicago_test) %>%
+  bind_cols(
+    predict(lm_fit, Chicago_test, type = "pred_int"),
+    Chicago_test
+  )
+
+res_test %>% select(date, ridership, starts_with(".pred"))
+
+res_test %>% rmse(ridership, .pred)
+
+```
+
+Predict 2020
+
+```{r}
+load("Chicago_2020.RData")
+res_2020 <-
+  predict(lm_fit, Chicago_2020) %>%
+  bind_cols(
+    predict(lm_fit, Chicago_2020, type = "pred_int"),
+    Chicago_2020
+  ) 
+
+res_2020 %>% select(date, contains(".pred"))
+
+```
+
+2020 predictions are very bad
+
+```{r}
+res_2020 %>% select(date, ridership, starts_with(".pred"))
+
+
+res_2020 %>% rmse(ridership, .pred)
+
+```
+to measure applicabilty, do a PCA of predictors in the training set, and then see where the predictors in the test set fall in PCA space.  What percentile are they at?
+
+```{r}
+library(applicable)
+pca_stat <- apd_pca(~ ., data = Chicago_train %>% select(one_of(stations)), 
+                    threshold = 0.99)
+pca_stat
+
+```
+```{r}
+autoplot(pca_stat, distance) + labs(x = "distance")
+```
+
+distance of test set
+```{r}
+score(pca_stat, Chicago_test) %>% select(starts_with("distance"))
+
+```
+distance of 2020 set, much further!
+
+```{r}
+score(pca_stat, Chicago_2020) %>% select(starts_with("distance"))
+
+```
+
