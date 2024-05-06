@@ -1,0 +1,115 @@
+---
+title: "Chapter_20"
+output: 
+  html_document: 
+    keep_md: true
+date: "2024-05-05"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## 20.1 Creating a training set
+
+```{r}
+library(tidymodels)
+library(stacks)
+library(rules)
+tidymodels_prefer()
+
+load("Chapter_15_race_results.Rdata")
+
+concrete_stack <- 
+  stacks() %>% 
+  add_candidates(race_results)
+
+concrete_stack
+```
+
+## 20.2 Blending the predictions
+
+_The training set predictions and the corresponding observed outcome data are used to create a meta-learning model where the assessment set predictions are the predictors of the observed outcome data. _ 
+
+WHAT?
+
+In any case we are blending the predictions from different models, using some kind of penalized regression, like lasso.
+
+```{r}
+set.seed(2001)
+ens <- blend_predictions(concrete_stack)
+summary(ens)
+```
+
+```{r}
+autoplot(ens)
+```
+
+Try a broader range of penalities 
+```{r}
+set.seed(2002)
+ens <- blend_predictions(concrete_stack, penalty = 10^seq(-2, -0.5, length = 20))
+```
+
+```{r}
+autoplot(ens)
+```
+
+```{r}
+ens
+```
+
+```{r}
+autoplot(ens, "weights") +
+  geom_text(aes(x = weight + 0.01, label = model), hjust = 0) + 
+  theme(legend.position = "none") +
+  lims(x = c(-0.01, 0.8))
+```
+```{r}
+summary(ens)
+```
+
+```{r}
+ens$equations
+```
+
+## 20.3 Fit the member models
+
+so far have been tested on CV sets.  Now fit on whole training set.
+
+```{r}
+ens <- fit_members(ens)
+```
+
+
+## 20.4 Test Set Predictions
+
+```{r}
+reg_metrics <- metric_set(rmse, rsq)
+ens_test_pred <- 
+  predict(ens, concrete_test) %>% 
+  bind_cols(concrete_test)
+
+ens_test_pred %>% 
+  reg_metrics(compressive_strength, .pred)
+```
+
+Compare to best single model:
+
+```{r}
+best_results <- 
+   race_results %>% 
+   extract_workflow_set_result("boosting") %>% 
+   select_best(metric = "rmse")
+best_results
+
+boosting_test_results <- 
+   race_results %>% 
+   extract_workflow("boosting") %>% 
+   finalize_workflow(best_results) %>% 
+   last_fit(split = concrete_split)
+
+collect_metrics(boosting_test_results)
+
+```
+So the blended model is ever so slightly better...

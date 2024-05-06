@@ -232,6 +232,11 @@ race_results
 ```
 
 ```{r}
+save.image("Chapter_15_race_results.Rdata")
+```
+
+
+```{r}
 autoplot(
    race_results,
    rank_metric = "rmse",  
