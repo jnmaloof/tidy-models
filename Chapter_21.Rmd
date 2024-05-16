@@ -1,0 +1,89 @@
+---
+title: "Chapter_21"
+output: html_document
+date: "2024-05-16"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## 21.1 INFERENCE FOR COUNT DATA
+
+```{r}
+library(tidymodels)
+tidymodels_prefer()
+
+data("bioChemists", package = "pscl")
+
+ggplot(bioChemists, aes(x = art)) + 
+  geom_histogram(binwidth = 1, color = "white") + 
+  labs(x = "Number of articles within 3y of graduation")
+```
+
+## 21.2 COMPARISONS WITH TWO-SAMPLE TESTS
+
+```{r}
+bioChemists %>% 
+  group_by(fem) %>% 
+  summarize(counts = sum(art), n = length(art))
+
+```
+
+```{r}
+poisson.test(c(930, 619)) %>% 
+  tidy()
+```
+
+```{r}
+library(infer)
+
+observed <- 
+  bioChemists %>%
+  specify(art ~ fem) %>%
+  calculate(stat = "diff in means", order = c("Men", "Women"))
+observed
+```
+
+```{r}
+set.seed(2101)
+bootstrapped <- 
+  bioChemists %>%
+  specify(art ~ fem)  %>%
+  generate(reps = 2000, type = "bootstrap") %>%
+  calculate(stat = "diff in means", order = c("Men", "Women"))
+bootstrapped
+```
+
+```{r}
+percentile_ci <- get_ci(bootstrapped)
+percentile_ci
+```
+
+```{r}
+visualize(bootstrapped) +
+    shade_confidence_interval(endpoints = percentile_ci)
+```
+
+```{r}
+set.seed(2102)
+permuted <- 
+  bioChemists %>%
+  specify(art ~ fem)  %>%
+  hypothesize(null = "independence") %>%
+  generate(reps = 2000, type = "permute") %>%
+  calculate(stat = "diff in means", order = c("Men", "Women"))
+permuted
+
+```
+
+```{r}
+visualize(permuted) +
+    shade_p_value(obs_stat = observed, direction = "two-sided")
+```
+
+```{r}
+permuted %>%
+  get_p_value(obs_stat = observed, direction = "two-sided")
+```
+
