@@ -1,6 +1,8 @@
 ---
 title: "Chapter_21"
-output: html_document
+output: 
+  html_document: 
+    keep_md: true
 date: "2024-05-16"
 ---
 
@@ -77,6 +79,7 @@ permuted
 
 ```
 
+
 ```{r}
 visualize(permuted) +
     shade_p_value(obs_stat = observed, direction = "two-sided")
@@ -85,5 +88,179 @@ visualize(permuted) +
 ```{r}
 permuted %>%
   get_p_value(obs_stat = observed, direction = "two-sided")
+```
+
+
+## 21.3 LOG-LINEAR MODELS
+
+```{r}
+library(poissonreg)
+
+# default engine is 'glm'
+log_lin_spec <- poisson_reg()
+
+log_lin_fit <- 
+  log_lin_spec %>% 
+  fit(art ~ ., data = bioChemists)
+log_lin_fit
+
+```
+
+```{r}
+tidy(log_lin_fit, conf.int = TRUE, conf.level = 0.90)
+
+```
+
+```{r}
+set.seed(2103)
+glm_boot <- 
+  reg_intervals(art ~ ., data = bioChemists, model_fn = "glm", family = poisson)
+glm_boot
+
+```
+
+Likelihood ratio test of nested model:
+
+```{r}
+log_lin_reduced <- 
+  log_lin_spec %>% 
+  fit(art ~ ment + kid5 + fem + mar, data = bioChemists)
+
+anova(
+  extract_fit_engine(log_lin_reduced),
+  extract_fit_engine(log_lin_fit),
+  test = "LRT"
+) %>%
+  tidy()
+```
+
+## 21.4 a more complex model
+
+Zero inflated Poisson
+
+```{r}
+zero_inflated_spec <- poisson_reg() %>% set_engine("zeroinfl")
+
+zero_inflated_fit <- 
+  zero_inflated_spec %>% 
+  fit(art ~ fem + mar + kid5 + ment | fem + mar + kid5 + phd + ment,
+      data = bioChemists)
+
+zero_inflated_fit
+
+```
+
+Can we use LRT to compare to the regular Poisson model? No (But is it possible to roll our own based on number of paprameters?)
+
+```{r, eval=FALSE}
+anova(
+  extract_fit_engine(zero_inflated_fit),
+  extract_fit_engine(log_lin_reduced),
+  test = "LRT"
+) %>%
+  tidy()
+#> Error in UseMethod("anova"): no applicable method for 'anova' applied to an object of class "zeroinfl"
+```
+
+
+Can use AIC instead
+
+```{r}
+zero_inflated_fit %>% extract_fit_engine() %>% AIC()
+#> [1] 3232
+log_lin_reduced   %>% extract_fit_engine() %>% AIC()
+#> [1] 3312
+```
+
+But how significant is this difference?  Let's bootstrap it:
+
+```{r}
+zip_form <- art ~ fem + mar + kid5 + ment | fem + mar + kid5 + phd + ment
+glm_form <- art ~ fem + mar + kid5 + ment
+
+set.seed(2104)
+
+system.time({
+   bootstrap_models <-
+  bootstraps(bioChemists, times = 2000, apparent = TRUE) %>% # creates 2000 bootstrap samples
+  mutate( # note: analysis just converts the bootstrap split into a dataframe
+    glm = map(splits, ~ fit(log_lin_spec,       glm_form, data = analysis(.x))),
+    zip = map(splits, ~ fit(zero_inflated_spec, zip_form, data = analysis(.x)))
+  )
+   
+})
+
+bootstrap_models
+
+```
+
+Try it withh [furr](https://furrr.futureverse.org/)
+```{r, eval=FALSE}
+
+library(furrr)
+
+plan(multisession)
+set.seed(2104)
+
+system.time({
+   bootstrap_models2 <-
+  bootstraps(bioChemists, times = 2000, apparent = TRUE) %>% # creates 2000 bootstrap samples
+  mutate( # note: analysis just converts the bootstrap split into a dataframe
+    glm = future_map(splits, ~ fit(log_lin_spec,       glm_form, data = analysis(.x))),
+    zip = future_map(splits, ~ fit(zero_inflated_spec, zip_form, data = analysis(.x)))
+  )
+   
+})
+
+bootstrap_models2
+
+# Error in `mutate()`:
+# ℹ In argument: `glm = future_map(splits, ~fit(log_lin_spec, glm_form, data
+#   = analysis(.x)))`.
+# Caused by error:
+# ℹ In index: 1.
+# Caused by error in `UseMethod()`:
+# ! no applicable method for 'fit' applied to an object of class "c('poisson_reg', 'model_spec')"
+# Backtrace:
+#   1. parallel (local) workRSOCK()
+#  26. base::eval(...)
+#  27. base::eval(...)
+#  30. purrr (local) `<fn>`(.x = `<list>`, .f = `<fn>`)
+#  31. purrr:::map_("list", .x, .f, ..., .progress = .progress)
+#  35. .f(.x[[i]], ...)
+#  36. ...furrr_fn(...)
+#  37. generics::fit(log_lin_spec, glm_form, data = analysis(.x))
+ 
+```
+
+
+get the bootstrap confidence intervals for the coefficients:
+
+```{r}
+bootstrap_models <-
+  bootstrap_models %>%
+  mutate(zero_coefs  = map(zip, ~ tidy(.x, type = "zero")))
+
+# One example:
+bootstrap_models$zero_coefs[[1]]
+
+```
+
+plot it
+```{r}
+bootstrap_models %>% 
+  unnest(zero_coefs) %>% 
+  ggplot(aes(x = estimate)) +
+  geom_histogram(bins = 25, color = "white") + 
+  facet_wrap(~ term, scales = "free_x") + 
+  geom_vline(xintercept = 0, lty = 2, color = "gray70")
+```
+
+```{r}
+bootstrap_models %>% int_pctl(zero_coefs)
+
+
+bootstrap_models %>% int_t(zero_coefs)
+
 ```
 
