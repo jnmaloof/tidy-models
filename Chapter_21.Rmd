@@ -171,9 +171,9 @@ zero_inflated_fit %>% extract_fit_engine() %>% AIC()
 log_lin_reduced   %>% extract_fit_engine() %>% AIC()
 #> [1] 3312
 ```
-
+https://moderndive.com/foreword.html
 But how significant is this difference?  Let's bootstrap it:
-
+https://moderndive.com/foreword.html
 ```{r}
 zip_form <- art ~ fem + mar + kid5 + ment | fem + mar + kid5 + phd + ment
 glm_form <- art ~ fem + mar + kid5 + ment

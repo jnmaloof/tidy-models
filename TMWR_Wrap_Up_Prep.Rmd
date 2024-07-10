@@ -1,0 +1,310 @@
+---
+title: "TMWR_FinalPrep"
+author: "Julin Maloof"
+date: "2024-07-04"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+#library(trackeR)
+library(FITfileR)
+library(NISTunits)
+library(lubridate)
+```
+
+```{r}
+urlbase <- "https://cos.ridewithgps.com/user_backups/26156-c947bfb7a7f8bc34aab3151ef38cc0fa58649573/rwgps_backup_2024-07-03_"
+```
+
+```{r, eval=FALSE}
+for(i in 1:15) {
+  url <- str_c(urlbase,i,".zip")
+  out <- str_c("tcx_data/rwgps_backup_2024-07-03_",i,".zip")
+  download.file(url,out)
+  unzip(out, exdir = "tcx_data")
+}
+
+
+```
+
+
+
+```{r}
+fit1 <- readFitFile("tcx_data/2012-05-18T14-39-00Z-654646.fit")
+fit1
+``` 
+
+
+```{r}
+records(fit1)
+summary(records(fit1))
+```
+distance is meters
+altitude is meters
+speed is m/s
+
+```{r}
+getMessagesByType(fit1, "session")
+```
+
+```{r}
+files <- tibble(name=dir("tcx_data/", "fit"))
+files
+```
+
+```{r}
+get_longest <- function(fitdata) {
+  x <- records(fitdata)
+  if(is_tibble(x)) {
+    return(x)
+  } else
+  {
+    return(x[[which.max(map(x, nrow))]])
+  }
+}
+
+
+files <- files %>%
+  mutate(alldata=map(name, ~ readFitFile(file.path("tcx_data", .x))),
+         records=map(alldata, get_longest))
+```
+
+```{r}
+save(files, file="final_assignment_prep.Rdata")
+```
+
+
+get some per session info
+```{r}
+getSession <- function(x) {
+  if(any(str_detect(listMessageTypes(x), "session"))) return(getMessagesByType(x, "session"))
+  return(NA)
+}
+
+files <- files %>% mutate(session=map(alldata, getSession))
+
+files <- files %>%
+  filter(map_lgl(session, is_tibble))
+
+files <- files %>%
+  unnest(session)
+
+```
+
+
+```{r, eval=FALSE}
+save(files, file="final_assignment_prep_2.Rdata")
+```
+
+```{r, eval=FALSE}
+load("final_assignment_prep_2.Rdata")
+```
+
+```{r}
+head(files)
+```
+
+```{r}
+files$sport %>% unique
+```
+
+```{r}
+files <- files %>% mutate(total_distance=NISTmeterTOmile(total_distance),
+                          avg_speed=NISTmeterPerSecTOmilePerHour(avg_speed),
+                          max_speed=NISTmeterPerSecTOmilePerHour(max_speed))
+files <- files %>% filter(sport=="cycling", !is.na(avg_heart_rate), avg_heart_rate < 200, total_distance > 10)
+```
+
+## format ride summaries and calcualte previous miles
+
+```{r}
+summaries <- files %>% select(-alldata, - records)
+```
+
+
+```{r}
+summaries <- summaries %>%
+  mutate(date=as_date(start_time)) # get rid of time, retain date
+
+calc_prev_miles <- function(data=summaries, current_date, interval) {
+  data %>%
+    filter(date < current_date, date >= current_date - lubridate::days(interval)) %>%
+    pull(total_distance) %>%
+    sum()
+}
+
+summaries <- summaries %>%
+  rowwise() %>%
+  mutate(miles_prev_14=calc_prev_miles(current_date=date, interval=14),
+         miles_prev_28=calc_prev_miles(current_date = date, interval = 28))
+
+summaries$miles_prev_14[1:3] <- NA
+summaries$miles_prev_28[1:4] <- NA
+
+summaries <- summaries %>%
+  select(name, start_time, date, total_elapsed_time, total_timer_time, total_distance, total_calories, avg_speed, max_speed, total_ascent, total_descent, avg_heart_rate, max_heart_rate, avg_cadence, max_cadence, starts_with("miles") )
+```
+
+```{r}
+save(summaries, file="final_assignment_prep_summary.Rdata")
+```
+
+```{r}
+load(file="final_assignment_prep_summary.Rdata")
+```
+
+```{r}
+ridedat <- files %>% select(name, records) %>% unnest(records) 
+ridedat <- ridedat %>% select(name,timestamp, distance, altitude, speed, power, grade, heart_rate, cadence, temperature)
+```
+
+convert units
+
+distance is meters
+altitude is meters
+speed is m/s
+
+```{r}
+ridedat <- ridedat %>%
+  mutate(distance=NISTmeterTOmile(distance),
+         altitude=NISTmeterTOft(altitude),
+         speed=NISTmeterPerSecTOmilePerHour(speed)
+  )
+```
+
+
+```{r}
+summary(ridedat)
+```
+```{r}
+ridedat <- ridedat %>% filter(!is.na(heart_rate), heart_rate < 190)
+```
+
+
+```{r}
+ridedat
+```
+
+We have 1 observation per second, let's reduce this to one per minute
+
+```{r}
+ridedat.small <- ridedat %>% 
+  mutate(hhmm=str_c(
+    lubridate::hour(timestamp),
+    lubridate::minute(timestamp))) %>% 
+  group_by(name) %>%
+  filter(!duplicated(hhmm)) %>%
+  select(-hhmm)
+
+ridedat.small
+```
+
+```{r}
+summary(ridedat.small)
+```
+
+some weird readings...investigate
+
+```{r}
+ridedat.small[(which.min(ridedat.small$altitude)-9):(which.min(ridedat.small$altitude)+10),]
+```
+
+```{r}
+ridedat.small <- ridedat.small %>% filter(altitude>0)
+```
+
+
+```{r}
+ridedat.small[(which.max(ridedat.small$speed)-9):(which.max(ridedat.small$speed)+10),]
+```
+
+```{r}
+ridedat.small %>% 
+  ggplot(aes(y=speed)) +
+  geom_boxplot()
+```
+
+```{r}
+ridedat.small <- ridedat.small[-((which.max(ridedat.small$speed)-3):(which.max(ridedat.small$speed)+3)),]
+```
+
+Add altitude change:
+
+```{r}
+ridedat.small <- ridedat.small %>%
+  group_by(name) %>%
+  mutate(altitude_lag = dplyr::lag(altitude),
+         time_lag = dplyr::lag(timestamp),
+         time_delta = as.numeric(timestamp-time_lag),
+         altitude_delta = (altitude-altitude_lag)/time_delta) %>%
+  ungroup() %>%
+  na.omit() %>%
+  select(-altitude_lag, -time_delta, -time_lag)
+```
+
+
+```{r}
+ridedat.small <- ridedat.small %>% filter(cadence < 130)
+```
+
+Bring in ride summary data
+
+```{r}
+ridedat.small <- ridedat.small %>% left_join(summaries)
+```
+
+```{r}
+ridedat.small <- ridedat.small %>%
+  select(name:temperature, date, starts_with("miles"), -power, -grade) %>%
+  na.omit
+```
+
+Convert date to JM_age
+```{r}
+ridedat.small <- ridedat.small %>%
+  mutate(jm_age=interval(mdy("05-02-1967"), date) ,
+         jm_age=as.numeric(jm_age, 'years'),
+         jm_age=round(jm_age, 1)) 
+```
+
+Create Elapsed Time column
+
+```{r}
+ridedat.small <- ridedat.small %>%
+  group_by(name) %>%
+  mutate(elapsed_time_m={
+    interval(timestamp[1], timestamp) %>%
+      as.numeric('minutes') %>%
+      round(1) 
+  }
+  ) %>%
+  ungroup()
+```
+
+
+```{r}
+write_csv(ridedat.small, "ride_data_small.csv.gz")
+```
+
+```{r}
+write_csv(summaries, "ride_summaries.csv.gz")
+```
+
+Further reduce to one observation per 5 minutes
+```{r}
+ridedat.small <- read_csv("ride_data_small.csv.gz")
+ridedat.smaller <- ridedat.small %>% 
+  filter( (lubridate::minute(timestamp) %% 5) == 0)
+
+ridedat.smaller
+```
+```{r}
+write_csv(ridedat.smaller, "ride_data_smaller.csv.gz")
+```
+
+
