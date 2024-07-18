@@ -422,7 +422,7 @@ autoplot(
 ```
 
 ```{r}
-save(all_results, file="TMWR_wrapup_all_race_results.Rdata")
+save(all_results, rides, rides_folds, rides_test, rides_train, rides_split, file="TMWR_wrapup_all_race_results.Rdata")
 ```
 
 ## Exercise 10
@@ -468,5 +468,32 @@ bayes_tune_boost <- tune_bayes(boost_wflow, resamples = rides_folds, initial=25,
 ```
 ```{r}
 show_best(bayes_tune_boost, metric = "rsq")
+```
+
+### race results saving workflow, etc
+
+for some downstream analysis, need to have workflow and model predictions saved in the race results.  Do that here:
+
+```{r}
+race_ctrl_save <-
+   control_race(
+     verbose = TRUE,
+     verbose_elim = TRUE,
+      save_pred = TRUE,
+      parallel_over = "everything",
+      save_workflow = TRUE
+   )
+
+system.time(all_race_results_save <-
+   all_workflows %>%
+   workflow_map(
+      "tune_race_anova",
+      seed = 707,
+      resamples = rides_folds,
+      grid = 25,
+      control = race_ctrl_save
+   ))
+
+save(all_race_results_save, rides, rides_folds, rides_test, rides_train, rides_split, file="TMWR_wrapup_all_race_results_save.Rdata")
 ```
 
