@@ -1,0 +1,153 @@
+---
+title: "TMWR_Final_Exercises"
+author: "Julin Maloof"
+date: "2024-07-17"
+output: html_document
+---
+
+```{r}
+library(tidyverse)
+library(GGally)
+library(tidymodels)
+tidymodels_prefer()
+library(finetune)
+library(doMC)
+registerDoMC(cores = 8)
+library(DALEXtra)
+library(forcats)
+library(stacks)
+```
+
+## Things to practice
+
+* 18 explaining models
+* 19 should you trust your predictions
+* 20 ensembles
+
+## Load the data
+
+```{r}
+rides <- read_csv("ride_data_smaller.csv.gz")
+glimpse(rides)
+summary(rides)
+```
+
+```{r}
+set.seed(707)
+rides_split <- group_initial_split(rides, group = name)
+#rides_split <- slice_sample(rides, prop=0.1, by = name) %>% group_initial_split(group = name)
+rides_train <- training(rides_split)
+rides_test <- testing(rides_split)
+rides_folds <- group_vfold_cv(rides_train, group = name, v=5)
+```
+
+```{r}
+load(file="TMWR_wrapup_all_race_results.Rdata")
+load
+```
+
+## Exercise 1
+
+Retrieve the best model and fit it to the _rides_train_ data set.
+
+
+```{r}
+best_results <- 
+   all_results %>% 
+   extract_workflow_set_result("simple_boosting") %>% 
+   select_best(metric = "rmse")
+
+boosting_fit <- 
+   all_results %>% 
+   extract_workflow("simple_boosting") %>% 
+   finalize_workflow(best_results) %>%
+  fit(rides_train)
+```
+
+## Exercise 2
+
+Find local explanations for how the model predicts the 1000th and 10000th observation in the training data set.  Plot the results.
+
+```{r}
+explainer_boost <- explain_tidymodels(
+  boosting_fit,
+  data=rides_train,
+  y=rides_train$heart_rate
+)
+```
+
+```{r}
+rides_train[1000,]
+rides_train[10000,]
+
+predict_parts(explainer=explainer_boost, new_observation = rides_train[c(1000),])
+
+predict_parts(explainer=explainer_boost, new_observation = rides_train[c(10000),])
+```
+
+```{r}
+predict_parts(explainer=explainer_boost, new_observation = rides_train[c(1000),],
+              type="shap", B = 20) %>%
+   group_by(variable) %>%
+  mutate(mean_val = mean(contribution)) %>%
+  ungroup() %>%
+  mutate(variable = fct_reorder(variable, abs(mean_val))) %>%
+  ggplot(aes(contribution, variable, fill = mean_val > 0)) +
+  geom_col(data = ~distinct(., variable, mean_val), 
+           aes(mean_val, variable), 
+           alpha = 0.5) +
+  geom_boxplot(width = 0.5) +
+  theme(legend.position = "none") +
+  scale_fill_viridis_d() +
+  labs(y = NULL)
+```
+
+
+```{r}
+predict_parts(explainer=explainer_boost, new_observation = rides_train[c(10000),],
+              type="shap", B = 20) %>%
+   group_by(variable) %>%
+  mutate(mean_val = mean(contribution)) %>%
+  ungroup() %>%
+  mutate(variable = fct_reorder(variable, abs(mean_val))) %>%
+  ggplot(aes(contribution, variable, fill = mean_val > 0)) +
+  geom_col(data = ~distinct(., variable, mean_val), 
+           aes(mean_val, variable), 
+           alpha = 0.5) +
+  geom_boxplot(width = 0.5) +
+  theme(legend.position = "none") +
+  scale_fill_viridis_d() +
+  labs(y = NULL)
+```
+
+## Exercise 3
+
+Determine global variable importance and plot the restuls.  Feel free to use the default plotting methods instead of the one in the book.  Explain the x-axis.
+
+```{r}
+set.seed(1803)
+vip <- model_parts(explainer_boost, loss_function = loss_root_mean_square)
+plot(vip)
+str(vip)
+```
+
+## Exercise 4
+
+Create a partial dependence profile for the four most important variables from exercise 3.  Plot (again using the default instead of the code from the book is fine).  Does this help explain why the boosting tree model is beter than linear regression?
+```{r}
+set.seed(1805)
+pdp <- model_profile(explainer_boost, N = 1000, variables = c("jm_age", "speed", "distance", "altitude_delta"))
+```
+
+```{r}
+plot(pdp)
+```
+
+## Exercise 5
+
+```{r}
+hr_stacks <- stacks() %>%
+  add_candidates(all_results)
+hr_stacks
+```
+

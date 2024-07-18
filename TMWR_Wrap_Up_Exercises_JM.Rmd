@@ -2,7 +2,9 @@
 title: "TMWR_Final_Exercises"
 author: "Julin Maloof"
 date: "2024-07-07"
-output: html_document
+output: 
+  html_document: 
+    keep_md: true
 ---
 
 ```{r}
@@ -12,7 +14,7 @@ library(tidymodels)
 tidymodels_prefer()
 library(finetune)
 library(doMC)
-registerDoMC(cores = 8)
+registerDoMC(cores = 7)
 ```
 
 ## Things to practice
@@ -40,7 +42,7 @@ rides %>% ggplot(aes(x=heart_rate)) + geom_histogram()
 
 ```{r, eval=FALSE}
 rides %>% slice_sample(n=1000) %>% 
-  select(heart_rate, everything(), -name, -timestamp) %>%
+  select(heart_rate, everything(), -name, -timestamp, -date, -altitude) %>%
   ggpairs(progress = FALSE)
 ```
 

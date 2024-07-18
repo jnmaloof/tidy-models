@@ -1,0 +1,25 @@
+---
+title: "TMWR_Final_Exercises_part2"
+author: 
+date: "2024-07-17"
+output: html_document
+---
+
+## Exercise 1
+
+Retrieve the best model and fit it to the _rides_train_ data set.
+
+
+## Exercise 2
+
+Find local explanations for how the model predicts the 1000th and 10000th observation in the training data set.  Plot the results.
+
+
+## Exercise 3
+
+Determine global variable importance and plot the restuls.  Feel free to use the default plotting methods instead of the one in the book.  Explain the x-axis.
+
+
+## Exercise 4
+
+Create a partial dependence profile for the four most important variables from exercise 3.  Plot (again using the default instead of the code from the book is fine).  Does this help explain why the boosting tree model is beter than linear regression?
