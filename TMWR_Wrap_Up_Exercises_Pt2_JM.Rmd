@@ -2,7 +2,9 @@
 title: "TMWR_Final_Exercises"
 author: "Julin Maloof"
 date: "2024-07-17"
-output: html_document
+output: 
+  html_document: 
+    keep_md: true
 ---
 
 ```{r}
@@ -143,11 +145,4 @@ pdp <- model_profile(explainer_boost, N = 1000, variables = c("jm_age", "speed",
 plot(pdp)
 ```
 
-## Exercise 5
-
-```{r}
-hr_stacks <- stacks() %>%
-  add_candidates(all_results)
-hr_stacks
-```
 
