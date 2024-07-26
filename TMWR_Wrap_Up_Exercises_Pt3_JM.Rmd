@@ -1,0 +1,121 @@
+---
+title: "TMWR Wrap up Part 3"
+author: "Julin Maloof"
+date: "2024-07-26"
+output: 
+  html_document: 
+    keep_md: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Trying to make an ensemble model
+
+```{r}
+library(tidyverse)
+library(tidymodels)
+tidymodels_prefer()
+library(finetune)
+library(recipes)
+library(rules)
+library(baguette)
+library(doMC)
+registerDoMC(cores = 8)
+library(stacks)
+#library(future)
+```
+
+```{r}
+load("TMWR_wrapup_all_race_results_save.Rdata")
+```
+
+## Create the training set for stacking
+
+```{r}
+hr_stack <- 
+  stacks() %>% 
+  add_candidates(all_race_results_save)
+
+hr_stack
+```
+## Blend the predictions
+```{r}
+set.seed(2024)
+hr_ens <- blend_predictions(hr_stack, penalty = 10^seq(-4, -0.5, length = 25))
+```
+
+```{r}
+autoplot(hr_ens)
+```
+
+```{r}
+autoplot(hr_ens, type="members")
+```
+
+```{r}
+autoplot(hr_ens, type="weights")
+```
+
+```{r}
+hr_ens
+```
+
+```{r}
+system.time(hr_ens <- fit_members(hr_ens))
+```
+
+## Try it on the test set
+```{r}
+reg_metrics <- metric_set(rmse, rsq)
+hr_ens_test_pred <- 
+  predict(hr_ens, rides_test) %>% 
+  bind_cols(rides_test)
+
+hr_ens_test_pred %>% 
+  reg_metrics(heart_rate, .pred)
+```
+Compared to RMSE 11.6 and Rsq 0.54 for the boosting model on its own.
+
+## Repeat, allowing negative
+
+## Blend the predictions
+```{r}
+set.seed(2024)
+hr_ens_2 <- blend_predictions(hr_stack, penalty = 10^seq(-4, -0.5, length = 25), non_negative = FALSE)
+```
+
+```{r}
+autoplot(hr_ens_2)
+```
+
+```{r}
+autoplot(hr_ens_2, type="members")
+```
+
+```{r}
+autoplot(hr_ens_2, type="weights")
+```
+
+```{r}
+hr_ens_2
+```
+
+```{r}
+system.time(hr_ens_2 <- fit_members(hr_ens_2))
+```
+
+## Try it on the test set
+```{r}
+reg_metrics <- metric_set(rmse, rsq)
+hr_ens_test_pred_2 <- 
+  predict(hr_ens_2, rides_test) %>% 
+  bind_cols(rides_test)
+
+hr_ens_test_pred_2 %>% 
+  reg_metrics(heart_rate, .pred)
+```
+A little better than the one that did not allow negatives, but not as good as straight boosting: RMSE 11.6 and Rsq 0.54 for the boosting model on its own.
+
+
