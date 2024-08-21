@@ -1,0 +1,123 @@
+---
+title: "TMWR_Wrap_Up_Exercises_Ch21_Template"
+author: "Julin Maloof"
+date: "2024-08-21"
+output: html_document
+---
+
+This exercise is designed to test skills learned in Chapter 21: Inferential Analysis from Tidy Modeling in R
+
+This data comes from a tropical rainforest seedling community in Xishuangbanna, China. Originally, the data included trait data measured on individual seedlings and plot-level environmental data and was used to make inferences about how interactions among traits explain patterns of relative growth rate of seedlings across light and soil nutrient gradients. The publication can be found [here](https://esajournals.onlinelibrary.wiley.com/doi/abs/10.1002/ecy.3007). For this exercise, I have adapted the data as well as "made-up" some new variables to better match the chapter data. All the continuous variables have been centered and scaled.
+
+The data include
+
+-   Plot - 1 x 1 meter plots randomly distributed in the forest to capture the seedling community
+-   Elevation - Elevation of the plot in meters
+-   Elevation.Group - Elevation classified as Low or High
+-   Abundance - total number of individual seedlings in each plot
+-   log.SLA - mean specific leaf area of all individuals in the plot, ratio of leaf area to leaf dry mass, high values indicate lighter leaves that photosynthesize more quickly.
+-   log.LMF - mean leaf mass fraction of all individuals in the plot, total leaf dry mass divided by whole plant dry mass, represents biomass allocation to leaves
+-   log.RMF - mean root mass fraction of all individuals in the plot, total root dry mass divided by whole plant dry mass, represents biomass allocation to roots
+-   log.Soil - scores from the first axis of PCA, higher values mean more nutrient rich soil
+-   log.Light - percent canopy openness above the plot, higher values mean more open canopy and access to light
+-   n.Species - number of species in each plot
+
+The goal of this exercise is to try to explain differences in abundance among the plots.
+
+```{r}
+library(tidyverse)
+library(tidymodels)
+tidymodels_prefer()
+```
+
+## Exercise 1
+
+Visualize the distribution of seedling abundance data. What do you notice about the distribution?
+
+```{r}
+dat <- read_csv("final.data.csv")
+summary(dat)
+glimpse(dat)
+```
+
+```{r}
+skimr::skim(dat)
+```
+
+```{r}
+dat %>% ggplot(aes(x=Abundance)) + geom_histogram()
+```
+long right tail! (i.e. right skewed)
+
+```{r}
+dat %>% ggplot(aes(x=Abundance)) + geom_histogram() + scale_x_log10()
+dat %>% ggplot(aes(x=Abundance)) + geom_histogram() + scale_x_sqrt()
+
+```
+
+
+## Exercise 2
+
+Our first hypothesis is that there is a difference in abundance between Low and High elevation groups. Show how you would summarize the data to test this hypothesis and then analyse the data to test the hypothesis. Hint: This data was collected over the same 1 year period for all of the plots across all elevations. Was the hypothesis supported?
+
+```{r}
+dat %>%
+  ggplot(aes(y=Abundance, x=Elevation.Group)) +
+  geom_boxplot()
+```
+```{r}
+dat %>%
+  ggplot(aes(x=Abundance, color=Elevation.Group, fill = Elevation.Group)) +
+  geom_density(alpha=.3)
+```
+
+```{r}
+dat %>%
+  summarise(n=n(), .by = Elevation.Group)
+```
+
+Is this the correct way?  
+
+```{r, eval=TRUE}
+elev.sums <- dat %>% 
+  summarize(sum.abundance=sum(Abundance), .by = Elevation.Group) %>% 
+  pull(sum.abundance)
+elev.plots <- dat %>% 
+  summarise(n=n(), .by = Elevation.Group) %>%
+  pull(n)
+
+poisson.test(elev.sums, elev.plots) 
+```
+
+## Exercise 3
+
+Let's test the hypothesis under fewer distributional assumptions than the Poisson distribution. 
+
+1. Use the `infer` package to perform a more powerful hypothesis test of the difference in abundance means between the elevation groups. 
+2. Compute a confidence interval around the mean
+3. Visualize the bootstrap data with confidence intervals
+4. Calculate a p-value
+5. Visualize the permuted p-values with the observed value
+
+## Exercise 4
+
+The two-sample tests performed above are suboptimal because they do not account for other factors that might explain abundance. We will now move to generalized linear models (glm). 
+
+1. Fit a model of Abundance that includes all predictors in the data frame except Plot and n.Species. Which predictors are significant?
+2. Conduct a rough test of the model assumptions
+3. Determine which predictors to keep in the model. Fit the reduced model with only significant predictor(s) found in Step 2
+
+Should we use the full model or the reduced model?
+
+## Exercise 5
+
+This data set is not zero-inflated so we will deviate from the book chapter here. Our data does, however, have groupings as part of the set-up where plots were distributed across elevations. Instead of elevation being a predictor, let's make it a random effect in the model. You will need the package `multilevelmod` for this analysis. Hint: Review the engine types to set the correct one. These can be viewed used `?poisson_reg`.
+
+1. Fit a generalized linear mixed-effects model with Elevation as the random effect.
+2. Visualize the tidy model summary. You will need the `broom.mixed` package.
+3. Use AIC to compare the full model fit above to the new model with the random effect. Create 500 model fits and extract the AIC values. Which model was better fit? Hint: This is part of the exercises in the book chapter.
+
+## Exercise 6
+
+From the bootstrap_models generated above, extract and plot the model coefficients.
+
