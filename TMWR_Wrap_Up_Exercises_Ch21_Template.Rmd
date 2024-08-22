@@ -332,6 +332,49 @@ coefs %>%
   ggplot(aes(x=estimate)) +
   geom_histogram() +
   facet_wrap(~ term) +
-  geom_vline(xintercept = 0, color = "red")
+  geom_vline(xintercept = 0, color =)
+```
+
+## negative binomial
+
+no negative binomial models in parsnip yet, but what if we fit the traditional way?
+
+```{r}
+nb <- glmer.nb(Abundance ~ log.RMF + log.Soil + log.SLA + (1|Elevation) + Elevation.Group, data = dat)
+summary(nb)
+```
+
+```{r}
+boot_results <- bootstraps_dat %>%
+  mutate(
+    glm = map(splits, ~ fit(log_lin_spec, Abundance ~ log.RMF + log.Soil + log.SLA + (1|Elevation) + Elevation.Group, data = analysis(.x))),
+    glmer = map(splits, ~ fit(log_lmer_spec, Abundance ~ log.RMF + log.Soil + log.SLA + (1|Elevation) + Elevation.Group, data = analysis(.x))),
+    glmer.nb = map(splits, ~ glmer.nb(Abundance ~ log.RMF + log.Soil + log.SLA + (1|Elevation) + Elevation.Group, data = analysis(.x)))
+  )
+boot_results
+```
+
+```{r}
+boot_results <-
+  boot_results %>%
+  mutate(
+    glm_aic = map_dbl(glm, ~ extract_fit_engine(.x) %>% AIC()),
+    glmer_aic = map_dbl(glmer, ~ extract_fit_engine(.x) %>% AIC()),
+    glmer.nb_aic = map_dbl(glmer.nb, AIC)
+  )
+
+```
+
+```{r}
+boot_results %>% 
+  pivot_longer(ends_with("aic"),
+               names_to = "model", 
+               values_to = "aic") %>%
+  summarize(`mean AIC` = mean(aic), 
+            SEM = sd(aic) / sqrt(n()),
+            .by = model
+  )
+
+
 ```
 
