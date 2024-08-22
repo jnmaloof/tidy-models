@@ -2,7 +2,9 @@
 title: "TMWR_Wrap_Up_Exercises_Ch21_Template"
 author: "Julin Maloof"
 date: "2024-08-21"
-output: html_document
+output: 
+  html_document: 
+    keep_md: true
 ---
 
 This exercise is designed to test skills learned in Chapter 21: Inferential Analysis from Tidy Modeling in R
@@ -28,6 +30,10 @@ The goal of this exercise is to try to explain differences in abundance among th
 library(tidyverse)
 library(tidymodels)
 tidymodels_prefer()
+library(infer)
+library(poissonreg)
+library(multilevelmod)
+library(broom.mixed)
 ```
 
 ## Exercise 1
@@ -94,30 +100,238 @@ poisson.test(elev.sums, elev.plots)
 Let's test the hypothesis under fewer distributional assumptions than the Poisson distribution. 
 
 1. Use the `infer` package to perform a more powerful hypothesis test of the difference in abundance means between the elevation groups. 
+
+```{r}
+observed <- 
+  dat %>%
+  specify(Abundance ~ Elevation.Group) %>%
+  calculate(stat = "diff in means", order = c("Low", "High"))
+observed
+```
+
 2. Compute a confidence interval around the mean
+
+```{r}
+set.seed(2101)
+bootstrapped <- 
+  dat %>%
+  specify(Abundance ~ Elevation.Group) %>%
+  generate(reps = 2000, type = "bootstrap") %>%
+  calculate(stat = "diff in means", order = c("Low", "High"))
+bootstrapped
+```
+
+```{r}
+percentile_ci <- get_ci(bootstrapped)
+percentile_ci
+```
+
+
 3. Visualize the bootstrap data with confidence intervals
+
+```{r}
+visualize(bootstrapped) +
+    shade_confidence_interval(endpoints = percentile_ci)
+```
+
 4. Calculate a p-value
+
+```{r}
+set.seed(2401)
+permuted <- 
+  dat %>%
+  specify(Abundance ~ Elevation.Group) %>%
+  hypothesize(null = "independence") %>%
+  generate(reps = 2000, type = "bootstrap") %>%
+  calculate(stat = "diff in means", order = c("Low", "High"))
+permuted
+
+```
+```{r}
+permuted %>%
+  get_p_value(obs_stat = observed, direction = "two-sided")
+```
+
+
 5. Visualize the permuted p-values with the observed value
+
+```{r}
+visualize(permuted) +
+    shade_p_value(obs_stat = observed, direction = "two-sided")
+```
+
 
 ## Exercise 4
 
 The two-sample tests performed above are suboptimal because they do not account for other factors that might explain abundance. We will now move to generalized linear models (glm). 
 
 1. Fit a model of Abundance that includes all predictors in the data frame except Plot and n.Species. Which predictors are significant?
+
+```{r}
+log_lin_spec <- poisson_reg()
+
+log_lin_fit <- 
+  log_lin_spec %>% 
+  fit(Abundance ~ . - Plot - n.Species, data = dat)
+log_lin_fit
+```
+
+```{r}
+tidy(log_lin_fit)
+```
+
+
 2. Conduct a rough test of the model assumptions
+
+We do this by fitting a boot strap model and comparing the confidence intervals
+
+```{r}
+set.seed(2103)
+glm_boot <- 
+  reg_intervals(Abundance ~ . - Plot - n.Species, data = dat, model_fn = "glm", family = poisson)
+glm_boot #90% confidence intervals??
+```
+
+Get Confidence Intervals from the glm fit...
+
+```{r}
+glm_param <- log_lin_fit %>% tidy(conf.int = TRUE, conf.level = 0.90) %>%
+  mutate(.method = "parametric") %>%
+  rename(.lower = conf.low, .upper = conf.high, .estimate=estimate) %>%
+  filter(term != "(Intercept)")
+
+glm_param
+```
+
+```{r}
+bind_rows(glm_param, glm_boot) %>%
+  ggplot(aes(x=.estimate, y=term, shape=.method, color = .method)) +
+  geom_point(position = position_dodge(width = 0.5)) +
+  geom_errorbarh(aes(xmin=.lower, xmax = .upper), height = 0.25, position = position_dodge(width = 0.5))
+```
+
+
 3. Determine which predictors to keep in the model. Fit the reduced model with only significant predictor(s) found in Step 2
 
+If we believe the boot strapping we would only include log.RMF
+
+```{r}
+log_lin_reduced1 <- 
+  log_lin_spec %>% 
+  fit(Abundance ~ log.RMF + log.Soil + log.SLA + Elevation + Elevation.Group, data = dat)
+
+log_lin_reduced2 <- 
+  log_lin_spec %>% 
+  fit(Abundance ~ log.RMF, data = dat)
+
+anova(
+  extract_fit_engine(log_lin_reduced2),
+  extract_fit_engine(log_lin_reduced1),
+  extract_fit_engine(log_lin_fit),
+  test = "LRT"
+) %>%
+  tidy()
+```
+
 Should we use the full model or the reduced model?
+
+Best model is the partially reduced model; the full model is no better than the partially redice.
+
+But what about the fact that Poisson doesn't really fit...
 
 ## Exercise 5
 
 This data set is not zero-inflated so we will deviate from the book chapter here. Our data does, however, have groupings as part of the set-up where plots were distributed across elevations. Instead of elevation being a predictor, let's make it a random effect in the model. You will need the package `multilevelmod` for this analysis. Hint: Review the engine types to set the correct one. These can be viewed used `?poisson_reg`.
 
 1. Fit a generalized linear mixed-effects model with Elevation as the random effect.
+
+```{r}
+log_lmer_spec <- log_lin_spec %>% set_engine("glmer")
+
+log_lmer_reduced1 <- 
+  log_lmer_spec %>% 
+  fit(Abundance ~ log.RMF + log.Soil + log.SLA + (1|Elevation) + Elevation.Group, data = dat)
+
+```
+
 2. Visualize the tidy model summary. You will need the `broom.mixed` package.
+
+```{r}
+tidy(log_lmer_reduced1)
+```
+
 3. Use AIC to compare the full model fit above to the new model with the random effect. Create 500 model fits and extract the AIC values. Which model was better fit? Hint: This is part of the exercises in the book chapter.
+
+```{r}
+bootstraps_dat <- bootstraps(dat, times = 2000, apparent = TRUE)
+
+glm_boot <- workflow(spec = log_lin_spec) %>% 
+  add_formula(Abundance ~ log.RMF + log.Soil + log.SLA + Elevation + Elevation.Group) %>%
+  fit_resamples(resamples = bootstraps_dat, 
+                control=control_resamples(extract = extract_fit_engine  ))
+
+glmer_boot <- workflow() %>%
+  add_variables(outcomes = Abundance, predictors = c(log.RMF, log.Soil, log.SLA, Elevation, Elevation.Group)) %>%
+  add_model(log_lmer_spec, formula = Abundance ~ log.RMF + log.Soil + log.SLA + (1|Elevation) + Elevation.Group) %>%
+  fit_resamples(resamples = bootstraps_dat,
+                control=control_resamples(extract = extract_fit_engine)  )
+
+
+# why doesn;t this work?
+#glmer_boot <- workflow(spec = log_lmer_spec) %>%
+#  add_formula(Abundance ~ log.RMF + log.Soil + log.SLA + (1|Elevation) + Elevation.Group) %>%
+#  fit_resamples(resamples = bootstraps_dat)
+  
+  
+```
+
 
 ## Exercise 6
 
 From the bootstrap_models generated above, extract and plot the model coefficients.
+
+
+
+```{r}
+boots <- bind_rows(list(glm=glm_boot, glmer=glmer_boot), .id="model")
+
+boots <- boots %>%
+  mutate(fit = map(.extracts, ~ .x$.extracts[[1]]),
+         aic = map_dbl(fit, AIC)) 
+
+boots %>% 
+  summarize(mean_aic=mean(aic), sem=sd(aic)/sqrt(n()), .by = model)
+```
+
+```{r}
+boots_wide <- boots %>%
+  select(id, model, aic) %>%
+  pivot_wider(names_from = model, values_from = aic, names_prefix = "aic.")
+
+mean(boots_wide$aic.glmer < boots_wide$aic.glm)
+
+```
+
+glmer model is better
+
+
+## Exercise 6
+From the bootstrap_models generated above, extract and plot the model coefficients.
+
+```{r}
+coefs <- boots %>% filter(model=="glmer") %>%
+  select(fit) %>%
+  mutate(tidy=map(fit, tidy)) %>%
+  unnest(tidy)
+
+coefs
+```
+
+```{r}
+coefs %>%
+  ggplot(aes(x=estimate)) +
+  geom_histogram() +
+  facet_wrap(~ term) +
+  geom_vline(xintercept = 0, color = "red")
+```
 
